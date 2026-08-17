@@ -6,7 +6,6 @@ import json
 import threading
 
 from rich.text import Text
-from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Collapsible, Static
 
@@ -291,10 +290,6 @@ class ChatPanel(VerticalScroll):
     }
     """
 
-    BINDINGS = [
-        Binding("ctrl+t", "toggle_transcript", "Full transcript"),
-    ]
-
     def __init__(self, event_bus: EventBus):
         super().__init__()
         self.event_bus = event_bus
@@ -532,11 +527,4 @@ class ChatPanel(VerticalScroll):
             marker="✗", marker_style="#f85149",
             text=event.data.get("message", ""), body_style="#f85149",
         ))
-
-
-    def action_toggle_transcript(self) -> None:
-        try:
-            self.app.push_screen("transcript_view")
-        except Exception:
-            pass
 
