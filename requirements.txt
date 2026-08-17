@@ -1,12 +1,15 @@
 # DRX-Operator 核心依赖
 
-# TUI 框架
-textual>=0.86.0
+# TUI 框架（8.x 实测；selection/Screen API 依赖 8.x）
+textual>=8.0,<9
+
+# 富文本渲染（chat_panel/footer/banner 直接 import）
+rich>=13.0.0
 
 # Web 搜索（ddgs 为主，失败时回退 DuckDuckGo Instant Answer API）
 ddgs>=9.0.0
 
-# HTTP 请求
+# HTTP 请求（openai/anthropic 的传递依赖，显式声明）
 requests>=2.28.0
 urllib3>=1.26.0
 
