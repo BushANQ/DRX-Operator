@@ -92,7 +92,8 @@ class SafetyGate:
         if request_id in self._pending:
             req = self._pending[request_id]
             req.approved = True
-            self._session_approvals.add(f"{req.operation}:{req.target}")
+            if req.risk_level != RiskLevel.L4:
+                self._session_approvals.add(f"{req.operation}:{req.target}")
             del self._pending[request_id]
             return True
         return False

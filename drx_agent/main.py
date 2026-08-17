@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from drx_agent.event_bus import EventBus, Event, EventType
 from drx_agent.tui.app import DrxAgentApp
 from drx_agent.safety.gate import SafetyGate
-from drx_agent.safety.target_validator import TargetValidator
 from drx_agent.agent.knowledge_base import KnowledgeBase
 from drx_agent.agent.task_scheduler import TaskScheduler, TaskPriority, ScheduledTask
 from drx_agent.agent.master import MasterAgent
@@ -172,7 +171,6 @@ class DrxAgent:
         self.event_bus = EventBus()
 
         self.safety_gate = SafetyGate()
-        self.target_validator = TargetValidator()
 
         self.knowledge_base = KnowledgeBase()
 
@@ -259,6 +257,7 @@ class DrxAgent:
             ))
 
     async def async_teardown(self) -> None:
+        self.master.shutdown()
         await self.mcp_manager.close_all()
 
     def _load_skills(self):
@@ -334,6 +333,13 @@ class DrxAgent:
                             for t in self.master.todos
                         ]},
                     ))
+                self.event_bus.publish(Event(
+                    type=EventType.STATUS_UPDATE,
+                    data={
+                        "mode": self.master.mode,
+                        "active_targets": len(self.knowledge_base.list_targets()),
+                    },
+                ))
                 self.event_bus.publish(Event(
                     type=EventType.AGENT_MESSAGE,
                     data={

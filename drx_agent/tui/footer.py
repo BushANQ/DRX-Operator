@@ -41,6 +41,7 @@ class StatusFooter(Static):
             "active_targets": 0,
             "requests": 0,
             "mode": "act",
+            "text": "",
         }
 
     def on_mount(self) -> None:
@@ -57,6 +58,8 @@ class StatusFooter(Static):
         ):
             if k in data:
                 self._state[k] = data[k]
+        if "text" in data:
+            self._state["text"] = str(data["text"])[:48]
         self._render()
 
     def _build_text(self) -> str:
@@ -71,6 +74,8 @@ class StatusFooter(Static):
             f"[#d2a8ff]rate:[/] {s['rate']} r/min",
             f"[#f0883e]targets:[/] {s['active_targets']}",
         ]
+        if s["text"]:
+            parts.insert(0, f"[italic #8b949e]{s['text']}[/]")
         status = " │ ".join(parts)
         width = self.size.width or 140
         pad = width - _visible_len(status) - _visible_len(_AUTHOR)

@@ -151,6 +151,8 @@ class MasterAgent:
         # Serializes the ReAct loop: a steering message waits for the current
         # loop to release the lock, so tool_call/tool pairs can't interleave.
         self._chat_lock: Optional[asyncio.Lock] = None
+        self._safety_approval_lock: asyncio.Lock = asyncio.Lock()
+        self._tool_approval_lock: asyncio.Lock = asyncio.Lock()
         # Project memory from DRX.md / AGENTS.md, appended to the system prompt every turn.
         self.project_memory: str = self._load_project_memory()
         self.project_memory_path: Optional[Path] = self._project_memory_path()
@@ -3665,19 +3667,20 @@ class MasterAgent:
             return
         self.publish_action("💤 做梦中：二次剪枝 + 整合进度文档…")
 
-        # Tighten the progress doc itself (second pass).
-        if self._progress_doc:
-            tighter = await self._update_progress_doc(self._progress_doc, [])
-            if tighter:
-                self._progress_doc = tighter
+        async with self._get_chat_lock():
+            # Tighten the progress doc itself (second pass).
+            if self._progress_doc:
+                tighter = await self._update_progress_doc(self._progress_doc, [])
+                if tighter:
+                    self._progress_doc = tighter
 
-        # Force full compaction by lowering the budget to 0 (folds a not-yet-full context into the doc).
-        saved = self.context_token_limit
-        self.context_token_limit = 1
-        try:
-            await self._maybe_compact_context()
-        finally:
-            self.context_token_limit = saved
+            # Force full compaction by lowering the budget to 0 (folds a not-yet-full context into the doc).
+            saved = self.context_token_limit
+            self.context_token_limit = 1
+            try:
+                await self._maybe_compact_context()
+            finally:
+                self.context_token_limit = saved
 
         used = self._estimate_messages_tokens(self.messages)
         self.publish_action(
@@ -3741,6 +3744,22 @@ class MasterAgent:
         fut = self._tool_approval_future
         if fut is not None and not fut.done():
             fut.set_result(False)
+        fut = self._safety_approval_future
+        if fut is not None and not fut.done():
+            fut.set_result(False)
+        if self._safety_approval_request_id:
+            self.safety_gate.deny(self._safety_approval_request_id)
+
+    def shutdown(self) -> None:
+        """Release subprocess-backed resources (PTY shells, OOB listener)."""
+        try:
+            self.shells.close_all()
+        except Exception:
+            logging.getLogger(__name__).exception("Shell session cleanup failed")
+        try:
+            self.oob.stop()
+        except Exception:
+            logging.getLogger(__name__).exception("OOB listener cleanup failed")
 
     async def _chat_with_llm(self, user_text: str, _skip_user_message: bool = False) -> None:
         
@@ -3948,35 +3967,36 @@ class MasterAgent:
         self, tool_name: str, preview: str, decision: Any
     ) -> bool:
         
-        loop = asyncio.get_running_loop()
-        fut = loop.create_future()
-        self._tool_approval_future = fut
-        self._tool_approval_args = (tool_name, decision.args_repr or "")
+        async with self._tool_approval_lock:
+            loop = asyncio.get_running_loop()
+            fut = loop.create_future()
+            self._tool_approval_future = fut
+            self._tool_approval_args = (tool_name, decision.args_repr or "")
 
-        self.event_bus.publish(
-            Event(
-                type=EventType.APPROVAL_REQUEST,
-                data={
-                    "request_id": f"perm:{tool_name}",
-                    "operation": f"{tool_name} — {preview}",
-                    "risk_level": "L2",
-                    "target": "(permission gate)",
-                    "requires_approval": True,
-                    "requires_confirmation_phrase": False,
-                    "rule": decision.reason,
-                },
+            self.event_bus.publish(
+                Event(
+                    type=EventType.APPROVAL_REQUEST,
+                    data={
+                        "request_id": f"perm:{tool_name}",
+                        "operation": f"{tool_name} — {preview}",
+                        "risk_level": "L2",
+                        "target": "(permission gate)",
+                        "requires_approval": True,
+                        "requires_confirmation_phrase": False,
+                        "rule": decision.reason,
+                    },
+                )
             )
-        )
-        self.publish_action(
-            f"工具 {tool_name} 需要授权: {decision.reason} "
-            f"[y]批准本次 / [a]总是允许本工具 / [n]拒绝"
-        )
+            self.publish_action(
+                f"工具 {tool_name} 需要授权: {decision.reason} "
+                f"[y]批准本次 / [a]总是允许本工具 / [n]拒绝"
+            )
 
-        try:
-            approved = await fut
-        finally:
-            self._tool_approval_future = None
-            self._tool_approval_args = None
+            try:
+                approved = await fut
+            finally:
+                self._tool_approval_future = None
+                self._tool_approval_args = None
         return bool(approved)
 
     async def _ask_continue_iteration(self, steps_so_far: int) -> bool:
@@ -4404,47 +4424,48 @@ class MasterAgent:
         requires_confirmation_phrase: bool,
         timeout: float = 600.0,
     ) -> bool:
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future = loop.create_future()
-        self._safety_approval_future = fut
-        self._safety_approval_request_id = request_id
-        self._safety_approval_requires_phrase = requires_confirmation_phrase
+        async with self._safety_approval_lock:
+            loop = asyncio.get_running_loop()
+            fut: asyncio.Future = loop.create_future()
+            self._safety_approval_future = fut
+            self._safety_approval_request_id = request_id
+            self._safety_approval_requires_phrase = requires_confirmation_phrase
 
-        self.event_bus.publish(
-            Event(
-                type=EventType.APPROVAL_REQUEST,
-                data={
-                    "request_id": request_id,
-                    "operation": operation,
-                    "risk_level": risk_level.value,
-                    "target": target,
-                    "requires_approval": requires_approval,
-                    "requires_confirmation_phrase": requires_confirmation_phrase,
-                },
+            self.event_bus.publish(
+                Event(
+                    type=EventType.APPROVAL_REQUEST,
+                    data={
+                        "request_id": request_id,
+                        "operation": operation,
+                        "risk_level": risk_level.value,
+                        "target": target,
+                        "requires_approval": requires_approval,
+                        "requires_confirmation_phrase": requires_confirmation_phrase,
+                    },
+                )
             )
-        )
-        if requires_confirmation_phrase:
-            self.publish_action(
-                f"破坏性操作 {operation}（target={target}）需要确认。"
-                f"请输入精确短语「{DESTROY_CONFIRMATION_PHRASE}」以继续。"
-            )
-        else:
-            self.publish_action(
-                f"操作 {operation}（target={target}）需要审批 "
-                f"[y]批准 / [n]拒绝 / [v]查看详情"
-            )
+            if requires_confirmation_phrase:
+                self.publish_action(
+                    f"破坏性操作 {operation}（target={target}）需要确认。"
+                    f"请输入精确短语「{DESTROY_CONFIRMATION_PHRASE}」以继续。"
+                )
+            else:
+                self.publish_action(
+                    f"操作 {operation}（target={target}）需要审批 "
+                    f"[y]批准 / [n]拒绝 / [v]查看详情"
+                )
 
-        try:
-            approved = await asyncio.wait_for(fut, timeout=timeout)
-        except asyncio.TimeoutError:
-            if request_id:
-                self.safety_gate.deny(request_id)
-            self.publish_action(f"审批超时，操作 {operation} 已拒绝。")
-            approved = False
-        finally:
-            self._safety_approval_future = None
-            self._safety_approval_request_id = None
-            self._safety_approval_requires_phrase = False
+            try:
+                approved = await asyncio.wait_for(fut, timeout=timeout)
+            except asyncio.TimeoutError:
+                if request_id:
+                    self.safety_gate.deny(request_id)
+                self.publish_action(f"审批超时，操作 {operation} 已拒绝。")
+                approved = False
+            finally:
+                self._safety_approval_future = None
+                self._safety_approval_request_id = None
+                self._safety_approval_requires_phrase = False
         return bool(approved)
 
     def _publish_approval_details(self, request_id: Optional[str]) -> None:
