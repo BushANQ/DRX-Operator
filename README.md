@@ -1,4 +1,4 @@
-# DRX-AGENT
+# DRX-Operator
 
 自主红队渗透测试专家系统 —— Agent-First 架构，LLM 驱动的自主安全测试平台。
 
