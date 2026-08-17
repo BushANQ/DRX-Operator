@@ -1,0 +1,35 @@
+{
+  "llm": {
+    "enabled": true,
+    "provider": "openai_compatible",
+    "model": "deepseek-v4-pro",
+    "api_key": "",
+    "base_url": "https://api.deepseek.com",
+    "temperature": 0.7,
+    "max_tokens": 4096,
+    "context_window": 1000000,
+    "verify_ssl": true,
+    "proxy": null,
+    "retry": {
+      "max_retries": 3,
+      "base_delay": 1.0,
+      "max_delay": 30.0
+    },
+    "fallback": [],
+    "features": {
+      "vulnerability_analysis": true,
+      "recommendations": true,
+      "threat_intel": true,
+      "natural_query": true
+    }
+  },
+  "mcp": {
+    "servers": {
+      "_example": {
+        "enabled": false,
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      }
+    }
+  }
+}

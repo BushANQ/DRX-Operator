@@ -1,0 +1,57 @@
+{
+  "port_scan": {
+    "name": "port_scan",
+    "category": "recon",
+    "code": "import socket; s = socket.socket(); s.connect(('{{target}}', {{port}}))",
+    "params": {
+      "target": "string",
+      "port": "int"
+    },
+    "source_skill": null,
+    "usage_count": 0,
+    "created_at": 1786987655.930967,
+    "updated_at": 1786987655.930968
+  },
+  "http_get": {
+    "name": "http_get",
+    "category": "recon",
+    "code": "import requests; r = requests.get('{{url}}'); print(r.status_code)",
+    "params": {
+      "url": "string"
+    },
+    "source_skill": null,
+    "usage_count": 0,
+    "created_at": 1786987655.9315681,
+    "updated_at": 1786987655.9315681
+  },
+  "test": {
+    "name": "test",
+    "category": "recon",
+    "code": "print(1)",
+    "params": {},
+    "source_skill": null,
+    "usage_count": 1,
+    "created_at": 1786987655.931923,
+    "updated_at": 1786987655.9320168
+  },
+  "scan1": {
+    "name": "scan1",
+    "category": "recon",
+    "code": "print(1)",
+    "params": {},
+    "source_skill": null,
+    "usage_count": 0,
+    "created_at": 1786987655.932322,
+    "updated_at": 1786987655.932322
+  },
+  "exploit1": {
+    "name": "exploit1",
+    "category": "exploit",
+    "code": "print(2)",
+    "params": {},
+    "source_skill": null,
+    "usage_count": 0,
+    "created_at": 1786987655.932405,
+    "updated_at": 1786987655.932405
+  }
+}

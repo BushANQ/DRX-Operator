@@ -1,0 +1,18 @@
+# DRX-AGENT 核心依赖
+
+# TUI 框架
+textual>=0.86.0
+
+# Web 搜索（ddgs 为主，失败时回退 DuckDuckGo Instant Answer API）
+ddgs>=9.0.0
+
+# HTTP 请求
+requests>=2.28.0
+urllib3>=1.26.0
+
+# LLM Providers（Anthropic / OpenAI / DeepSeek 均经 OpenAI 兼容客户端）
+anthropic>=0.18.0
+openai>=1.0.0
+
+# Skills 配置解析（skills/*/skill.yaml）
+pyyaml>=6.0

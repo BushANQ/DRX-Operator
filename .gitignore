@@ -1,0 +1,41 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+.pytest_cache/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data（日志 / 会话 / 报告 / 数据库）
+logs/
+sessions/
+reports/
+*.db
+
+# Local tooling
+.claude/
+.omo/
+docs/
+
+# Tests (local only, not published)
+tests/
+
+# Skills (local only, not published)
+skills/
