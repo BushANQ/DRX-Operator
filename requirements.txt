@@ -1,4 +1,4 @@
-# DRX-AGENT 核心依赖
+# DRX-Operator 核心依赖
 
 # TUI 框架
 textual>=0.86.0

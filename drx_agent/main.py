@@ -1,4 +1,4 @@
-"""DRX-AGENT: Autonomous Red-Team Penetration Testing Expert System.
+"""DRX-Operator: Autonomous Red-Team Penetration Testing Expert System.
 
 Agent-First architecture: TUI is a thin shell, the Agent is the
 first-class citizen.  All operations are LLM tool calls.
@@ -131,7 +131,7 @@ def _build_llm_provider(event_bus=None):
 
 
 class DrxAgent:
-    """DRX-AGENT main controller — connects all subsystems."""
+    """DRX-Operator main controller — connects all subsystems."""
 
     # execute_bash may run these; destructive ops are still blocked by
     # BashSandbox.BLOCKED_PATTERNS and the PermissionEngine. None → no whitelist.

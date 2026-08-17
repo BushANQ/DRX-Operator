@@ -1,8 +1,11 @@
 """Bottom status bar: cost/cache/rate/active targets/tokens"""
 
+from rich.text import Text as RichText
 from textual.widgets import Static
 
 from drx_agent.event_bus import EventBus, EventType, Event
+
+_AUTHOR = "[bold #58a6ff]BushSEC[/] [#8b949e]· github.com/BushANQ[/]"
 
 
 def _fmt_tokens(n: int) -> str:
@@ -11,6 +14,13 @@ def _fmt_tokens(n: int) -> str:
     if n >= 1_000:
         return f"{n / 1_000:.1f}k"
     return str(n)
+
+
+def _visible_len(markup: str) -> int:
+    try:
+        return RichText.from_markup(markup).cell_len
+    except Exception:
+        return len(markup)
 
 
 class StatusFooter(Static):
@@ -36,6 +46,9 @@ class StatusFooter(Static):
     def on_mount(self) -> None:
         self.event_bus.subscribe(EventType.STATUS_UPDATE, self._on_status)
 
+    def on_resize(self, event) -> None:
+        self._render()
+
     def _on_status(self, event: Event) -> None:
         data = event.data
         for k in (
@@ -44,7 +57,9 @@ class StatusFooter(Static):
         ):
             if k in data:
                 self._state[k] = data[k]
+        self._render()
 
+    def _build_text(self) -> str:
         s = self._state
         mode_style = "#f0883e" if s["mode"] == "plan" else "#3fb950"
         parts = [
@@ -56,5 +71,13 @@ class StatusFooter(Static):
             f"[#d2a8ff]rate:[/] {s['rate']} r/min",
             f"[#f0883e]targets:[/] {s['active_targets']}",
         ]
-        self.update(" │ ".join(parts))
+        status = " │ ".join(parts)
+        width = self.size.width or 140
+        pad = width - _visible_len(status) - _visible_len(_AUTHOR)
+        if pad < 1:
+            pad = 1
+        return status + " " * pad + _AUTHOR
+
+    def _render(self) -> None:
+        self.update(self._build_text())
 

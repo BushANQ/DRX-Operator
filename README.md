@@ -8,7 +8,7 @@
 
 ---
 
-DRX-AGENT 是一个 Agent-First 架构的自主渗透测试系统。与传统安全工具不同，DRX-AGENT
+DRX-Operator 是一个 Agent-First 架构的自主渗透测试系统。与传统安全工具不同，DRX-Operator
 的核心是一个 LLM 驱动的 **Master Agent**，它通过 ReAct（推理-行动）循环自主决策、
 调用工具链、分析结果，持续执行安全测试任务。终端界面（TUI）只是薄展示壳，
 Agent 是系统的一等公民 —— 所有操作都是 LLM 工具调用。
@@ -171,7 +171,7 @@ set -a && source .env && set +a    # 加载到当前 shell
 }
 ```
 
-DRX-AGENT 启动时会自动连接所有 `enabled: true` 的 MCP 服务器，并将其工具以
+DRX-Operator 启动时会自动连接所有 `enabled: true` 的 MCP 服务器，并将其工具以
 `mcp__<server_name>__<tool_name>` 的命名格式注入 LLM 工具列表。
 
 ### 启动
@@ -473,7 +473,7 @@ python -m drx_agent.main
 
 ## 免责声明
 
-DRX-AGENT（以下简称"本工具"）仅供授权的安全测试、研究、教育和合法的红队演练使用。
+DRX-Operator（以下简称"本工具"）仅供授权的安全测试、研究、教育和合法的红队演练使用。
 
 **使用本工具即表示您确认：**
 

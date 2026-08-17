@@ -1,4 +1,4 @@
-"""DRX-AGENT main TUI application — thin presentation shell over EventBus"""
+"""DRX-Operator main TUI application — thin presentation shell over EventBus"""
 
 import logging
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class DrxAgentApp(App):
-    """DRX-AGENT main TUI application"""
+    """DRX-Operator main TUI application"""
 
     CSS = """
     #main-container {
@@ -54,7 +54,7 @@ class DrxAgentApp(App):
         super().__init__()
         self.event_bus = event_bus
         self.drx_agent = drx_agent
-        self.title = "DRX-AGENT"
+        self.title = "DRX-Operator"
 
     def action_interrupt(self) -> None:
         self.event_bus.publish(Event(
@@ -75,7 +75,7 @@ class DrxAgentApp(App):
         self.install_screen(TranscriptScreen(self), name="transcript_view")
         self.install_screen(CommandPalette(self.event_bus), name="command_palette")
         self.event_bus.publish(
-            Event(type=EventType.STATUS_UPDATE, data={"text": "DRX-AGENT ready"})
+            Event(type=EventType.STATUS_UPDATE, data={"text": "DRX-Operator ready"})
         )
         if self.drx_agent is not None and hasattr(self.drx_agent, "async_setup"):
             try:

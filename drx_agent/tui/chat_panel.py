@@ -11,10 +11,27 @@ from textual.containers import VerticalScroll
 from textual.widgets import Collapsible, Static
 
 from drx_agent.event_bus import Event, EventBus, EventType
+from drx_agent.tui.banner import build_banner
 
 
 # The Textual loop thread, captured at import time; worker-thread publishes marshal back to it.
 _MAIN_THREAD_ID = threading.get_ident()
+
+
+class BannerBubble(Static):
+    """Startup banner: DRX-OPERATOR ASCII art + author line."""
+
+    DEFAULT_CSS = """
+    BannerBubble {
+        height: auto;
+        width: 100%;
+        margin: 0 0 1 0;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.update(build_banner())
 
 
 class DiffBubble(Static):
@@ -284,6 +301,9 @@ class ChatPanel(VerticalScroll):
         self._streams: dict[str, MessageBubble] = {}
         self._open_tools: dict[int, ToolCard] = {}
         self._setup_subscriptions()
+
+    def on_mount(self) -> None:
+        self._append(BannerBubble())
 
     def _setup_subscriptions(self) -> None:
         # Thread-marshal every handler: worker-thread publishes reroute to the Textual loop thread, where widget mounts are safe.
