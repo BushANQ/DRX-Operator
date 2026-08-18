@@ -38,6 +38,7 @@ class KnowledgeBase:
         self._findings: dict[str, list[Finding]] = {}
     # Credential vault keyed by host; target dicts hold lightweight id pointers so they stay JSON-serializable.
         self._credentials: dict[str, list[Credential]] = {}
+        self.blackboard = None
 
     def update_target(self, host: str, **kwargs) -> None:
         if host not in self._targets:
@@ -68,6 +69,31 @@ class KnowledgeBase:
 
     def get_findings(self, host: str) -> list[Finding]:
         return self._findings.get(host, [])
+
+    def all_findings(self) -> list[tuple[str, Finding]]:
+        out: list[tuple[str, Finding]] = []
+        for host, fs in self._findings.items():
+            out.extend((host, f) for f in fs)
+        return out
+
+    def finding_total(self) -> int:
+        return sum(len(fs) for fs in self._findings.values())
+
+    def findings_since(self, start: int) -> list[tuple[str, str]]:
+        flat = self.all_findings()
+        return [(host, f.claim) for host, f in flat[max(start, 0) :]]
+
+    def update_finding_status(
+        self, host: str, claim_substr: str, status: str
+    ) -> Finding | None:
+        if status not in Finding.VALID_STATUSES:
+            return None
+        for f in self._findings.get(host, []):
+            if claim_substr.lower() in f.claim.lower():
+                f.status = status
+                f.verified = status in ("confirmed", "exploited")
+                return f
+        return None
 
     def mark_owned(self, host: str, method: str = "") -> None:
         if host in self._targets:
@@ -135,7 +161,7 @@ class KnowledgeBase:
         return False
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "targets": self._targets,
             "findings": {
                 host: [f.to_dict() for f in fs]
@@ -147,6 +173,9 @@ class KnowledgeBase:
             },
             "finding_count": sum(len(f) for f in self._findings.values()),
         }
+        if self.blackboard is not None:
+            data["blackboard"] = self.blackboard.to_dict()
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "KnowledgeBase":
@@ -156,4 +185,9 @@ class KnowledgeBase:
             kb._findings[host] = [Finding.from_dict(f) for f in fs]
         for host, creds in (data.get("credentials") or {}).items():
             kb._credentials[host] = [Credential(**c) for c in creds]
+        bb_data = data.get("blackboard")
+        if isinstance(bb_data, dict):
+            from drx_agent.agent.blackboard import Blackboard
+
+            kb.blackboard = Blackboard.from_dict(bb_data)
         return kb

@@ -20,9 +20,9 @@ class Finding:
     verified: bool = False
     cve: str = ""
     severity: str = "info"
+    status: str = "suspected"
 
-    def has_evidence(self) -> bool:
-        return len(self.evidence) > 0
+    VALID_STATUSES = ("suspected", "confirmed", "exploited")
 
     def to_dict(self) -> dict:
         return {
@@ -32,10 +32,14 @@ class Finding:
             "verified": self.verified,
             "cve": self.cve,
             "severity": self.severity,
+            "status": self.status,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "Finding":
+        status = data.get("status", "confirmed" if data.get("verified") else "suspected")
+        if status not in cls.VALID_STATUSES:
+            status = "suspected"
         return cls(
             claim=data.get("claim", ""),
             confidence=data.get("confidence", 0.0),
@@ -43,6 +47,7 @@ class Finding:
             verified=data.get("verified", False),
             cve=data.get("cve", ""),
             severity=data.get("severity", "info"),
+            status=status,
         )
 
     def evidence_chain(self) -> str:

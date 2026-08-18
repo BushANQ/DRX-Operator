@@ -16,9 +16,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from drx_agent.agent.blackboard import Blackboard, SECTIONS
 from drx_agent.agent.finding import Evidence, Finding
 from drx_agent.agent.knowledge_base import Credential
 from drx_agent.agent.artifact_store import ArtifactStore
+from drx_agent.agent.prompts import METHODOLOGY_PROMPT, SUB_AGENT_DISCIPLINE
 from drx_agent.agent.sub_agent import SubAgent, SubAgentResult
 from drx_agent.agent.task_scheduler import ScheduledTask, TaskPriority, TaskScheduler
 from drx_agent.engine.bash_sandbox import BashSandbox, BLOCKED_PATTERNS
@@ -50,6 +52,7 @@ class MasterAgent:
     _PLAN_MODE_READONLY_TOOLS: set = {
         "read_file", "grep", "http_fetch", "web_search", "cve_lookup",
         "parse_nmap", "parse_http", "todo_write", "shell_list",
+        "list_findings", "blackboard_read",
     }
 
     def __init__(
@@ -71,6 +74,8 @@ class MasterAgent:
         self.python_sandbox = python_sandbox
         self.bash_sandbox = bash_sandbox
         self.knowledge_base = knowledge_base
+        if getattr(self.knowledge_base, "blackboard", None) is None:
+            self.knowledge_base.blackboard = Blackboard()
         self.safety_gate = safety_gate
         self.skills_registry = skills_registry
         self.script_library = script_library
@@ -325,6 +330,14 @@ class MasterAgent:
             await self._react_cycle("default", {"message": text})
 
 
+    @property
+    def blackboard(self) -> Blackboard:
+        bb = getattr(self.knowledge_base, "blackboard", None)
+        if bb is None:
+            bb = Blackboard()
+            self.knowledge_base.blackboard = bb
+        return bb
+
     def _build_system_prompt(self) -> str:
         targets = self.knowledge_base.list_targets()
         target_summary = (
@@ -332,6 +345,15 @@ class MasterAgent:
             if targets else "none"
         )
         owned = len(self.knowledge_base.owned_targets())
+        findings_lines = []
+        for f_host, f_obj in self.knowledge_base.all_findings()[:12]:
+            findings_lines.append(
+                f"- [{f_obj.status}] {f_host}: {f_obj.claim[:80]}"
+            )
+        findings_summary = (
+            "\n".join(findings_lines)
+            or "(空 — 发现即用 record_finding 记录，假设有生命周期)"
+        )
         memory_block = ""
         if self.project_memory:
             memory_block = (
@@ -391,17 +413,32 @@ class MasterAgent:
             "- generate_report(path?, format?, title?)：把会话产出汇总成 Markdown / HTML\n"
             "  报告写入磁盘。在用户说『出报告/写报告/总结成文档』时调用。\n"
             "知识库:\n"
-            "- update_target(host, info)：把发现的端口/服务/版本写入知识库。\n"
+            "- update_target(host, info)：把发现的端口/服务/版本写入知识库；\n"
+            "  完全控制目标时传 owned=true。\n"
+            "- record_finding(host, claim, evidence?, confidence?, severity?, cve?, status?)：\n"
+            "  记录发现/假设。status 三态：suspected(疑似)/confirmed(证实)/exploited(已利用)，\n"
+            "  evidence 数组放工具返回的关键数据。发现即记录，拿到证据就推进状态。\n"
+            "- update_finding_status(host, claim, status)：推进假设生命周期。\n"
+            "- list_findings(host?)：列出已记录的发现。\n"
+            "- cred_list / cred_show：查看凭据库。\n"
             "- dispatch_sub_agent(agent_type, target, task)：派发 recon/exploit/lateral\n"
             "  /persist/report 子 Agent（红队场景专用）。\n"
+            "黑板报（全体 Agent 共享的作战状态）:\n"
+            "- blackboard_write(section, text)：上板。section 取值：objective(作战目标)/\n"
+            "  findings(已确认发现)/hypotheses(待验证假设)/dead_ends(已尝试死路，禁止重复)/\n"
+            "  credentials(凭据)/next_steps(下一步计划)。\n"
+            "- blackboard_read(section?)：读某一区或全部。\n"
+            "  重要进展随手上板；派子 Agent 前先看黑板；死路必须上板。\n"
             "\n"
-            "【作业流程】Plan → Act(tool call) → Observe(读结果) → Reflect → 下一步。\n"
-            "每个结论必须有证据（工具返回的具体数据）。证据不足就继续调用工具。\n"
+            f"{METHODOLOGY_PROMPT}\n"
             f"\n【当前模式】{self.mode}。在 plan 模式下只能用只读工具（read/grep/"
-            "web_search/cve_lookup/http_fetch/parse_*/todo_write）；write/edit/exec/"
-            "shell/dispatch 全部被拒。用户切到 /act 才能动手。\n"
+            "web_search/cve_lookup/http_fetch/parse_*/todo_write/list_findings/"
+            "blackboard_read）；write/edit/exec/shell/dispatch 全部被拒。用户切到 /act 才能动手。\n"
             "\n"
             f"【当前知识库】targets=[{target_summary}], owned={owned}。\n"
+            f"【发现(Findings)】\n{findings_summary}\n"
+            "\n"
+            f"{self.blackboard.render(2000)}\n"
             "\n"
             "高危操作（漏洞利用/横向移动/破坏性）需用户审批，先告知再执行。"
             + memory_block
@@ -486,7 +523,10 @@ class MasterAgent:
                 "type": "function",
                 "function": {
                     "name": "update_target",
-                    "description": "把发现的目标信息写入知识库（端口/服务/版本/备注）。",
+                    "description": (
+                        "把发现的目标信息写入知识库（端口/服务/版本/备注）。"
+                        "完全控制目标时传 owned=true。"
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -499,9 +539,128 @@ class MasterAgent:
                                 "type": "object",
                                 "description": "key=端口字符串，value=服务名/版本",
                             },
+                            "owned": {
+                                "type": "boolean",
+                                "description": "已完全控制该目标时置 true",
+                            },
                             "notes": {"type": "string"},
                         },
                         "required": ["host"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_finding",
+                    "description": (
+                        "记录一条发现/假设到知识库。status 三态：suspected(疑似，"
+                        "刚观察到可疑点)/confirmed(证实，有明确证据)/exploited(已利用"
+                        "成功)。evidence 数组放工具返回的关键数据片段。发现即记录，"
+                        "拿到新证据就用 update_finding_status 推进。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "host": {"type": "string"},
+                            "claim": {
+                                "type": "string",
+                                "description": "一句话结论，如 'download.php 存在路径遍历'",
+                            },
+                            "evidence": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "支撑证据片段（工具输出的关键行）",
+                            },
+                            "confidence": {"type": "number"},
+                            "severity": {
+                                "type": "string",
+                                "enum": ["info", "low", "medium", "high", "critical"],
+                            },
+                            "cve": {"type": "string"},
+                            "status": {
+                                "type": "string",
+                                "enum": ["suspected", "confirmed", "exploited"],
+                            },
+                        },
+                        "required": ["host", "claim"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "update_finding_status",
+                    "description": (
+                        "推进假设生命周期：suspected → confirmed → exploited。"
+                        "claim 填要更新的原发现的子串即可。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "host": {"type": "string"},
+                            "claim": {"type": "string"},
+                            "status": {
+                                "type": "string",
+                                "enum": ["suspected", "confirmed", "exploited"],
+                            },
+                        },
+                        "required": ["host", "claim", "status"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_findings",
+                    "description": "列出已记录的发现（可按 host 过滤），含状态/严重度/CVE。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "host": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "blackboard_write",
+                    "description": (
+                        "写黑板报（全体 Agent 共享作战状态）。section：objective(作战"
+                        "目标)/findings(已确认发现)/hypotheses(待验证假设)/dead_ends("
+                        "已尝试死路——上板后全员禁止重复)/credentials(凭据)/next_steps("
+                        "下一步计划)。重要进展随手记。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "section": {
+                                "type": "string",
+                                "enum": list(SECTIONS.keys()),
+                            },
+                            "text": {"type": "string"},
+                            "author": {
+                                "type": "string",
+                                "description": "署名（如 master / recon-ab12）",
+                            },
+                        },
+                        "required": ["section", "text"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "blackboard_read",
+                    "description": (
+                        "读黑板报。不传 section 返回全部；传了返回该区完整条目。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "section": {"type": "string"},
+                        },
                     },
                 },
             },
@@ -1389,6 +1548,16 @@ class MasterAgent:
                 )
             elif name == "update_target":
                 result_text = self._tool_update_target(args)
+            elif name == "record_finding":
+                result_text = self._tool_record_finding(args)
+            elif name == "update_finding_status":
+                result_text = self._tool_update_finding_status(args)
+            elif name == "list_findings":
+                result_text = self._tool_list_findings(args)
+            elif name == "blackboard_write":
+                result_text = self._tool_blackboard_write(args)
+            elif name == "blackboard_read":
+                result_text = self._tool_blackboard_read(args)
             elif name == "cred_add":
                 result_text = self._tool_cred_add(args)
             elif name == "cred_list":
@@ -1791,8 +1960,110 @@ class MasterAgent:
         if not host:
             return json.dumps({"error": "host required"}, ensure_ascii=False)
         update = {k: v for k, v in args.items() if k != "host" and v is not None}
+        if update.pop("owned", False):
+            self.knowledge_base.update_target(host)
+            self.knowledge_base.mark_owned(host)
+            self.blackboard.add("findings", f"{host}: 已完全控制(owned)", author="master")
         self.knowledge_base.update_target(host, **update)
-        return json.dumps({"ok": True, "host": host, "updated": list(update.keys())}, ensure_ascii=False)
+        return json.dumps({"ok": True, "host": host, "updated": list(update.keys()) + (["owned"] if args.get("owned") else [])}, ensure_ascii=False)
+
+    def _tool_record_finding(self, args: dict) -> str:
+        host = args.get("host") or "unknown"
+        claim = (args.get("claim") or "").strip()
+        if not claim:
+            return json.dumps({"error": "claim required"}, ensure_ascii=False)
+        status = args.get("status") or "suspected"
+        if status not in Finding.VALID_STATUSES:
+            return json.dumps(
+                {"error": f"status must be one of {Finding.VALID_STATUSES}"},
+                ensure_ascii=False,
+            )
+        try:
+            confidence = float(args.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            confidence = 0.5
+        evidence = [
+            Evidence(type="tool_output", value=str(e)[:300])
+            for e in (args.get("evidence") or [])[:5]
+        ]
+        finding = Finding(
+            claim=claim,
+            confidence=confidence,
+            evidence=evidence,
+            cve=args.get("cve", "") or "",
+            severity=args.get("severity", "info") or "info",
+            status=status,
+            verified=status in ("confirmed", "exploited"),
+        )
+        self.knowledge_base.add_finding(host, finding)
+        board_section = "hypotheses" if status == "suspected" else "findings"
+        self.blackboard.add(board_section, f"{host}: {claim[:120]} [{status}]", author="master")
+        return json.dumps(
+            {"ok": True, "host": host, "status": status, "claim": claim[:120]},
+            ensure_ascii=False,
+        )
+
+    def _tool_update_finding_status(self, args: dict) -> str:
+        host = args.get("host") or ""
+        claim = args.get("claim") or ""
+        status = args.get("status") or ""
+        finding = self.knowledge_base.update_finding_status(host, claim, status)
+        if finding is None:
+            return json.dumps(
+                {"error": f"no finding on {host} matches claim substr or bad status"},
+                ensure_ascii=False,
+            )
+        self.blackboard.add(
+            "findings", f"{host}: {finding.claim[:120]} [{status}]", author="master"
+        )
+        return json.dumps(
+            {"ok": True, "host": host, "claim": finding.claim[:120], "status": status},
+            ensure_ascii=False,
+        )
+
+    def _tool_list_findings(self, args: dict) -> str:
+        host_filter = args.get("host")
+        rows = []
+        for f_host, f_obj in self.knowledge_base.all_findings():
+            if host_filter and f_host != host_filter:
+                continue
+            rows.append(
+                {
+                    "host": f_host,
+                    "claim": f_obj.claim,
+                    "status": f_obj.status,
+                    "severity": f_obj.severity,
+                    "cve": f_obj.cve,
+                    "confidence": f_obj.confidence,
+                    "verified": f_obj.verified,
+                }
+            )
+        return json.dumps(
+            {"findings": rows[:50], "count": len(rows)}, ensure_ascii=False
+        )
+
+    def _tool_blackboard_write(self, args: dict) -> str:
+        ok = self.blackboard.add(
+            args.get("section", ""),
+            args.get("text", ""),
+            author=args.get("author", "") or "master",
+        )
+        if not ok:
+            return json.dumps(
+                {"ok": False, "error": "bad section, empty text, or duplicate",
+                 "valid_sections": list(SECTIONS.keys())},
+                ensure_ascii=False,
+            )
+        return json.dumps({"ok": True, "section": args.get("section")}, ensure_ascii=False)
+
+    def _tool_blackboard_read(self, args: dict) -> str:
+        section = args.get("section")
+        if section:
+            return json.dumps(
+                {"section": section, "entries": self.blackboard.entries(section)},
+                ensure_ascii=False,
+            )
+        return json.dumps(self.blackboard.to_dict(), ensure_ascii=False)
 
     async def _tool_dispatch_sub_agent(self, args: dict) -> str:
         agent_type = args.get("agent_type", "recon")
@@ -1813,6 +2084,12 @@ class MasterAgent:
                 "status": getattr(getattr(result, "status", None), "value", str(getattr(result, "status", ""))),
                 "scripts_executed": getattr(result, "scripts_executed", 0),
                 "error": getattr(result, "error", ""),
+                "text": (getattr(result, "text", "") or "")[:4000],
+                "new_findings": [
+                    {"host": h, "claim": c[:120]}
+                    for h, c in (getattr(result, "findings", None) or [])[:20]
+                ],
+                "new_targets": list(getattr(result, "new_targets", None) or [])[:10],
             },
             ensure_ascii=False,
         )
@@ -4317,6 +4594,19 @@ class MasterAgent:
             "完成任务后返回简洁、结构化的最终答复（包括关键证据），"
             "主 Agent 会以你的答复为准。失败请如实汇报。"
         )
+        sub_system += SUB_AGENT_DISCIPLINE
+        sub_system += "\n" + self.blackboard.render(1500) + "\n"
+        if self.skills_registry is not None:
+            skills = self.skills_registry.match([agent_type, target]) or []
+            if not skills:
+                skills = self.skills_registry.list_by_category(agent_type)
+            skill_blocks = [
+                (s.get("system_prompt") or "")[:2000]
+                for s in skills[:3]
+                if s.get("system_prompt")
+            ]
+            if skill_blocks:
+                sub_system += "\n【专业技能参考】\n" + "\n---\n".join(skill_blocks)
         tools = [
             t for t in self._build_tool_schemas()
             if t["function"]["name"] != "task"
@@ -4348,15 +4638,24 @@ class MasterAgent:
 
         self.scheduler.enqueue(scheduled_task)
 
+        findings_before = self.knowledge_base.finding_total()
+        targets_before = {t["host"] for t in self.knowledge_base.list_targets()}
+
         dequeued = self.scheduler.dequeue()
         if dequeued and dequeued.task_id == sub.agent_id:
             self.active_sub_agents[sub.agent_id] = sub
             try:
                 result = await sub.run()
-                return result
             finally:
                 self.scheduler.task_completed(target)
                 self.active_sub_agents.pop(sub.agent_id, None)
+            result.findings = self.knowledge_base.findings_since(findings_before)
+            result.new_targets = [
+                h
+                for h in {t["host"] for t in self.knowledge_base.list_targets()}
+                - targets_before
+            ]
+            return result
 
         self.publish_action(
             f"Sub-agent {sub.agent_id} queued — target {target} at capacity"
