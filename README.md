@@ -8,6 +8,8 @@ An autonomous red-team penetration testing expert system — an **Agent-First**,
 
 **Author**: [BushSEC](https://github.com/BushANQ) · [bushsec.cn](https://bushsec.cn)
 
+![preview](JPG/1.jpg)
+
 ---
 
 DRX-Operator is an autonomous penetration testing system built around an **Agent-First architecture**. Unlike traditional security tools, the core of DRX-Operator is an LLM-powered **Master Agent** that autonomously makes decisions, invokes toolchains, analyzes results, and continuously executes security testing tasks through a ReAct (Reasoning + Acting) loop.
