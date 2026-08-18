@@ -88,10 +88,10 @@ The repository's `configs/default_config.json` is a clean template with an empty
 Recommended setup:
 
 ```bash
-cp .env.example .env       # Copy the template (.env is ignored by .gitignore)
+cp .env.example .env       
 # Edit .env and add your API key, for example:
 #   DRX_LLM_API_KEY=sk-xxxxxxxx
-set -a && source .env && set +a    # Load variables into the current shell
+set -a && source .env && set +a    
 ```
 
 API key resolution priority:
