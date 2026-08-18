@@ -6,6 +6,7 @@
 
 **Author**: [BushSEC](https://github.com/BushANQ) · [bushsec.cn](https://bushsec.cn)
 
+![preview](JPG/1.jpg)
 ---
 
 DRX-Operator 是一个 Agent-First 架构的自主渗透测试系统。与传统安全工具不同，DRX-Operator
