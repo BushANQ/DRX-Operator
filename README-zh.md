@@ -95,10 +95,10 @@ pip install -r requirements.txt
 会被提交的文件**。推荐做法：
 
 ```bash
-cp .env.example .env       # 复制模板（.env 已被 .gitignore 忽略，不会进仓库）
+cp .env.example .env       
 # 编辑 .env，填入你的密钥，例如：
 #   DRX_LLM_API_KEY=sk-xxxxxxxx
-set -a && source .env && set +a    # 加载到当前 shell
+set -a && source .env && set +a    
 ```
 
 密钥读取优先级：`DRX_LLM_API_KEY` > Provider 专用环境变量（见下表）>
