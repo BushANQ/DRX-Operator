@@ -48,7 +48,7 @@ class StatusFooter(Static):
         self.event_bus.subscribe(EventType.STATUS_UPDATE, self._on_status)
 
     def on_resize(self, event) -> None:
-        self._render()
+        self._refresh()
 
     def _on_status(self, event: Event) -> None:
         data = event.data
@@ -60,7 +60,7 @@ class StatusFooter(Static):
                 self._state[k] = data[k]
         if "text" in data:
             self._state["text"] = str(data["text"])[:48]
-        self._render()
+        self._refresh()
 
     def _build_text(self) -> str:
         s = self._state
@@ -83,6 +83,6 @@ class StatusFooter(Static):
             pad = 1
         return status + " " * pad + _AUTHOR
 
-    def _render(self) -> None:
+    def _refresh(self) -> None:
         self.update(self._build_text())
 

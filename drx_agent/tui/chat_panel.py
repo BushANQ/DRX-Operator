@@ -48,9 +48,9 @@ class DiffBubble(Static):
         super().__init__()
         self._title = title
         self._diff = diff_text
-        self._render()
+        self._refresh()
 
-    def _render(self) -> None:
+    def _refresh(self) -> None:
         rendered = Text()
         rendered.append("✎ ", style="#d2a8ff")
         rendered.append(self._title, style="bold #d2a8ff")
@@ -98,9 +98,9 @@ class TodoBubble(Static):
     def __init__(self, todos: list) -> None:
         super().__init__()
         self._todos = todos or []
-        self._render()
+        self._refresh()
 
-    def _render(self) -> None:
+    def _refresh(self) -> None:
         rendered = Text()
         rendered.append("☰ ", style="#d2a8ff")
         rendered.append(f"Todos ({len(self._todos)})\n", style="bold #d2a8ff")
