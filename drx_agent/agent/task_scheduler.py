@@ -47,6 +47,23 @@ class TaskScheduler:
                 await asyncio.sleep(wait)
         self._last_slot_ts = time.monotonic()
 
+    def try_acquire(self, target: str) -> bool:
+        """Take one in-flight slot for *target*. False if already at cap.
+
+        Dispatch awaits the sub-agent inline, so there is no worker draining
+        a queue. Capacity is a semaphore, not enqueue-then-dequeue (which
+        leaked slots when dequeue popped a different task).
+        """
+        current = self._target_concurrency.get(target, 0)
+        if current >= self.max_concurrent_per_target:
+            return False
+        self._target_concurrency[target] = current + 1
+        return True
+
+    def concurrency_for(self, target: str) -> int:
+        """In-flight count for *target* (0 if none)."""
+        return self._target_concurrency.get(target, 0)
+
     def enqueue(self, task: ScheduledTask) -> None:
         """Add a task to the queue. Tasks are sorted by priority after insertion."""
         self._queue.append(task)

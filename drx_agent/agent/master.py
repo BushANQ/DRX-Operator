@@ -22,7 +22,7 @@ from drx_agent.agent.knowledge_base import Credential
 from drx_agent.agent.artifact_store import ArtifactStore
 from drx_agent.agent.prompts import METHODOLOGY_PROMPT, SUB_AGENT_DISCIPLINE
 from drx_agent.agent.sub_agent import SubAgent, SubAgentResult
-from drx_agent.agent.task_scheduler import ScheduledTask, TaskPriority, TaskScheduler
+from drx_agent.agent.task_scheduler import TaskPriority, TaskScheduler
 from drx_agent.engine.bash_sandbox import BashSandbox, BLOCKED_PATTERNS
 from drx_agent.engine.python_sandbox import PythonSandbox, SandboxResult
 from drx_agent.engine.script_library import ScriptLibrary
@@ -88,6 +88,7 @@ class MasterAgent:
         # ReAct loop runs by default via the EventBus; start()/stop() only pause externally.
         self.running = True
         self.active_sub_agents: dict[str, SubAgent] = {}
+        self.active_sub_agent_tasks: dict[str, asyncio.Task] = {}
         self._script_counter = 0
         self._retry_counts: dict[str, int] = {}
         # After this many tool calls in one turn, ask the user to continue
@@ -3352,7 +3353,14 @@ class MasterAgent:
             parallel_tool_calls=True,
             usage_callback=self._record_usage,
         )
-        result = await sub.run()
+        self.active_sub_agents[sub.agent_id] = sub
+        task = asyncio.create_task(sub.run())
+        self.active_sub_agent_tasks[sub.agent_id] = task
+        try:
+            result = await task
+        finally:
+            self.active_sub_agent_tasks.pop(sub.agent_id, None)
+            self.active_sub_agents.pop(sub.agent_id, None)
 
         # L7 cross-agent: the sub-agent's full final answer becomes a shared
         # artifact (master keeps a pointer); findings flow via the shared KB.
@@ -4026,9 +4034,19 @@ class MasterAgent:
             fut.set_result(False)
         if self._safety_approval_request_id:
             self.safety_gate.deny(self._safety_approval_request_id)
+        for sub in list(self.active_sub_agents.values()):
+            sub.request_stop()
+        for task in list(self.active_sub_agent_tasks.values()):
+            if not task.done():
+                task.cancel()
 
     def shutdown(self) -> None:
         """Release subprocess-backed resources (PTY shells, OOB listener)."""
+        for task in list(self.active_sub_agent_tasks.values()):
+            if not task.done():
+                task.cancel()
+        self.active_sub_agent_tasks.clear()
+        self.active_sub_agents.clear()
         try:
             self.shells.close_all()
         except Exception:
@@ -4627,45 +4645,36 @@ class MasterAgent:
             usage_callback=self._record_usage,
         )
 
-        scheduled_task = ScheduledTask(
-            priority=priority.value,
-            task_id=sub.agent_id,
-            agent_type=agent_type,
-            target=target,
-            description=task,
-            ttl=sub.ttl,
-        )
-
-        self.scheduler.enqueue(scheduled_task)
+        if not self.scheduler.try_acquire(target):
+            self.publish_action(
+                f"Sub-agent {sub.agent_id} skipped — target {target} at capacity"
+            )
+            return SubAgentResult(
+                agent_id=sub.agent_id,
+                status=sub.status,
+                scripts_executed=0,
+                error="Target at concurrency capacity",
+            )
 
         findings_before = self.knowledge_base.finding_total()
         targets_before = {t["host"] for t in self.knowledge_base.list_targets()}
 
-        dequeued = self.scheduler.dequeue()
-        if dequeued and dequeued.task_id == sub.agent_id:
-            self.active_sub_agents[sub.agent_id] = sub
-            try:
-                result = await sub.run()
-            finally:
-                self.scheduler.task_completed(target)
-                self.active_sub_agents.pop(sub.agent_id, None)
-            result.findings = self.knowledge_base.findings_since(findings_before)
-            result.new_targets = [
-                h
-                for h in {t["host"] for t in self.knowledge_base.list_targets()}
-                - targets_before
-            ]
-            return result
-
-        self.publish_action(
-            f"Sub-agent {sub.agent_id} queued — target {target} at capacity"
-        )
-        return SubAgentResult(
-            agent_id=sub.agent_id,
-            status=sub.status,
-            scripts_executed=0,
-            error="Target at concurrency capacity",
-        )
+        self.active_sub_agents[sub.agent_id] = sub
+        task = asyncio.create_task(sub.run())
+        self.active_sub_agent_tasks[sub.agent_id] = task
+        try:
+            result = await task
+        finally:
+            self.scheduler.task_completed(target)
+            self.active_sub_agent_tasks.pop(sub.agent_id, None)
+            self.active_sub_agents.pop(sub.agent_id, None)
+        result.findings = self.knowledge_base.findings_since(findings_before)
+        result.new_targets = [
+            h
+            for h in {t["host"] for t in self.knowledge_base.list_targets()}
+            - targets_before
+        ]
+        return result
 
 
     async def _execute_script(

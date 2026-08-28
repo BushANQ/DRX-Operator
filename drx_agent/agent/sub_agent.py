@@ -25,6 +25,7 @@ class SubAgentStatus(str, Enum):
     DONE = "done"
     TIMEOUT = "timeout"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -73,6 +74,15 @@ class SubAgent:
         self.parallel_tool_calls = parallel_tool_calls
         self.usage_callback = usage_callback
         self.status = SubAgentStatus.QUEUED
+        self._interrupt = False
+
+    def request_stop(self) -> None:
+        """Cooperative stop; the owning task should also be cancelled."""
+        self._interrupt = True
+
+    def _mark_cancelled(self, error_seen: str) -> str:
+        self.status = SubAgentStatus.CANCELLED
+        return error_seen or "interrupted"
 
     async def run(self) -> SubAgentResult:
         self.status = SubAgentStatus.RUNNING
@@ -88,36 +98,56 @@ class SubAgent:
             )
         )
 
-        # No-LLM fallback (used by /scan, /exploit and unit tests): emit lifecycle events and a synthetic "done" result.
-        if self.llm_provider is None or self.tool_executor is None:
-            self.status = SubAgentStatus.DONE
+        scripts_executed = 0
+        final_text = ""
+        error_seen = ""
+
+        try:
+            # No-LLM fallback (used by /scan, /exploit and unit tests).
+            if self.llm_provider is None or self.tool_executor is None:
+                self.status = SubAgentStatus.DONE
+                scripts_executed = 1
+            else:
+                scripts_executed, final_text, error_seen = await self._react_loop()
+        except asyncio.CancelledError:
+            error_seen = self._mark_cancelled(error_seen)
+        finally:
+            if self.status == SubAgentStatus.RUNNING:
+                self.status = SubAgentStatus.DONE
             self.event_bus.publish(
                 Event(
                     type=EventType.SUB_AGENT_RESULT,
                     data={
                         "agent_id": self.agent_id,
                         "status": self.status.value,
-                        "scripts_executed": 1,
+                        "scripts_executed": scripts_executed,
+                        "text": final_text[:500],
                     },
                 )
             )
-            return SubAgentResult(
-                agent_id=self.agent_id,
-                status=self.status,
-                scripts_executed=1,
-            )
 
+        return SubAgentResult(
+            agent_id=self.agent_id,
+            status=self.status,
+            scripts_executed=scripts_executed,
+            error=error_seen,
+            text=final_text,
+        )
+
+    async def _react_loop(self) -> tuple[int, str, str]:
         messages: list[dict] = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": self.task},
         ]
-
         start = time.time()
         scripts_executed = 0
         final_text = ""
         error_seen = ""
 
-        for iteration in range(self.max_iterations):
+        for _iteration in range(self.max_iterations):
+            if self._interrupt:
+                error_seen = self._mark_cancelled(error_seen)
+                break
             if self.ttl and (time.time() - start) > self.ttl:
                 self.status = SubAgentStatus.TIMEOUT
                 error_seen = f"ttl ({self.ttl}s) exceeded"
@@ -132,6 +162,9 @@ class SubAgent:
                 async for ev in self.llm_provider.chat(
                     messages, tools=self.tool_schemas, stream=False
                 ):
+                    if self._interrupt:
+                        error_seen = self._mark_cancelled(error_seen)
+                        break
                     kind = getattr(ev, "type", None)
                     kind_value = kind.value if hasattr(kind, "value") else kind
                     if kind_value == "text" and ev.content:
@@ -155,11 +188,16 @@ class SubAgent:
                             except Exception:
                                 logger.exception("sub-agent usage_callback failed")
                         break
+            except asyncio.CancelledError:
+                error_seen = self._mark_cancelled(error_seen)
+                break
             except Exception as exc:
                 logger.exception("Sub-agent %s LLM call failed", self.agent_id)
                 error_seen = str(exc)
                 saw_error = True
 
+            if self.status is SubAgentStatus.CANCELLED:
+                break
             if saw_error:
                 self.status = SubAgentStatus.ERROR
                 break
@@ -168,82 +206,82 @@ class SubAgent:
             if text_now:
                 final_text = text_now
 
-            if pending_calls:
-                if assistant_msg is None:
-                    assistant_msg = {
-                        "role": "assistant",
-                        "content": text_now,
-                        "tool_calls": [
-                            {
-                                "id": c["id"] or f"call_{i}",
-                                "type": "function",
-                                "function": {
-                                    "name": c["name"],
-                                    "arguments": json.dumps(c["input"], ensure_ascii=False),
-                                },
-                            }
-                            for i, c in enumerate(pending_calls)
-                        ],
-                    }
-                messages.append(assistant_msg)
+            if not pending_calls:
+                break
+            if self._interrupt:
+                error_seen = self._mark_cancelled(error_seen)
+                break
 
-                if self.parallel_tool_calls and len(pending_calls) > 1:
-                    coros = [
-                        self.tool_executor(c["name"], c["input"]) for c in pending_calls
-                    ]
-                    results = await asyncio.gather(*coros, return_exceptions=True)
-                    for call, res in zip(pending_calls, results):
-                        if isinstance(res, Exception):
-                            res_text = json.dumps(
-                                {"error": f"tool raised: {res}"}, ensure_ascii=False
-                            )
-                        else:
-                            res_text = res
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": call["id"] or "",
-                            "name": call["name"],
-                            "content": res_text,
-                        })
-                        scripts_executed += 1
+            if assistant_msg is None:
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": text_now,
+                    "tool_calls": [
+                        {
+                            "id": c["id"] or f"call_{i}",
+                            "type": "function",
+                            "function": {
+                                "name": c["name"],
+                                "arguments": json.dumps(c["input"], ensure_ascii=False),
+                            },
+                        }
+                        for i, c in enumerate(pending_calls)
+                    ],
+                }
+            messages.append(assistant_msg)
+            scripts_executed += await self._run_tool_calls(pending_calls, messages)
+
+        return scripts_executed, final_text, error_seen
+
+    async def _run_tool_calls(
+        self, pending_calls: list[dict], messages: list[dict]
+    ) -> int:
+        executor = self.tool_executor
+        if executor is None:
+            return 0
+        executed = 0
+        if self.parallel_tool_calls and len(pending_calls) > 1:
+            coros = [executor(c["name"], c["input"]) for c in pending_calls]
+            try:
+                results = await asyncio.gather(*coros, return_exceptions=True)
+            except asyncio.CancelledError:
+                self.status = SubAgentStatus.CANCELLED
+                raise
+            for call, res in zip(pending_calls, results):
+                if isinstance(res, BaseException):
+                    res_text = json.dumps(
+                        {"error": f"tool raised: {res}"}, ensure_ascii=False
+                    )
                 else:
-                    for call in pending_calls:
-                        try:
-                            res = await self.tool_executor(call["name"], call["input"])
-                        except Exception as exc:
-                            res = json.dumps(
-                                {"error": f"tool raised: {exc}"}, ensure_ascii=False
-                            )
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": call["id"] or "",
-                            "name": call["name"],
-                            "content": res,
-                        })
-                        scripts_executed += 1
-                continue
-            break
+                    res_text = res
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call["id"] or "",
+                    "name": call["name"],
+                    "content": res_text,
+                })
+                executed += 1
+            return executed
 
-        if self.status == SubAgentStatus.RUNNING:
-            self.status = SubAgentStatus.DONE
-
-        self.event_bus.publish(
-            Event(
-                type=EventType.SUB_AGENT_RESULT,
-                data={
-                    "agent_id": self.agent_id,
-                    "status": self.status.value,
-                    "scripts_executed": scripts_executed,
-                    "text": final_text[:500],
-                },
-            )
-        )
-
-        return SubAgentResult(
-            agent_id=self.agent_id,
-            status=self.status,
-            scripts_executed=scripts_executed,
-            error=error_seen,
-            text=final_text,
-        )
+        for call in pending_calls:
+            if self._interrupt:
+                self.status = SubAgentStatus.CANCELLED
+                break
+            try:
+                res = await executor(call["name"], call["input"])
+            except asyncio.CancelledError:
+                self.status = SubAgentStatus.CANCELLED
+                raise
+            except Exception as exc:
+                res = json.dumps(
+                    {"error": f"tool raised: {exc}"}, ensure_ascii=False
+                )
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call["id"] or "",
+                "name": call["name"],
+                "content": res,
+            })
+            executed += 1
+        return executed
 
