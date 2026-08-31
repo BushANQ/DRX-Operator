@@ -21,8 +21,9 @@ class Finding:
     cve: str = ""
     severity: str = "info"
     status: str = "suspected"
+    superseded_by: str = ""
 
-    VALID_STATUSES = ("suspected", "confirmed", "exploited")
+    VALID_STATUSES = ("suspected", "confirmed", "exploited", "retracted")
 
     def to_dict(self) -> dict:
         return {
@@ -33,6 +34,7 @@ class Finding:
             "cve": self.cve,
             "severity": self.severity,
             "status": self.status,
+            "superseded_by": self.superseded_by,
         }
 
     @classmethod
@@ -48,6 +50,7 @@ class Finding:
             cve=data.get("cve", ""),
             severity=data.get("severity", "info"),
             status=status,
+            superseded_by=data.get("superseded_by", ""),
         )
 
     def evidence_chain(self) -> str:

@@ -84,7 +84,7 @@ class KnowledgeBase:
         return [(host, f.claim) for host, f in flat[max(start, 0) :]]
 
     def update_finding_status(
-        self, host: str, claim_substr: str, status: str
+        self, host: str, claim_substr: str, status: str, superseded_by: str = ""
     ) -> Finding | None:
         if status not in Finding.VALID_STATUSES:
             return None
@@ -92,6 +92,8 @@ class KnowledgeBase:
             if claim_substr.lower() in f.claim.lower():
                 f.status = status
                 f.verified = status in ("confirmed", "exploited")
+                if superseded_by:
+                    f.superseded_by = superseded_by
                 return f
         return None
 

@@ -21,7 +21,7 @@ from drx_agent.agent.finding import Evidence, Finding
 from drx_agent.agent.knowledge_base import Credential
 from drx_agent.agent.artifact_store import ArtifactStore
 from drx_agent.agent.prompts import METHODOLOGY_PROMPT, SUB_AGENT_DISCIPLINE
-from drx_agent.agent.sub_agent import SubAgent, SubAgentResult
+from drx_agent.agent.sub_agent import SubAgent, SubAgentResult, SubAgentStatus
 from drx_agent.agent.frontier import Frontier
 from drx_agent.agent.task_scheduler import TaskPriority, TaskScheduler
 from drx_agent.engine.bash_sandbox import BashSandbox, BLOCKED_PATTERNS
@@ -92,6 +92,7 @@ class MasterAgent:
         self.active_sub_agent_tasks: dict[str, asyncio.Task] = {}
         self.frontier: Frontier = Frontier()
         self._current_intent_id: str | None = None
+        self._recent_tool_keys: list[tuple[str, str]] = []
         self._script_counter = 0
         self._retry_counts: dict[str, int] = {}
         # After this many tool calls in one turn, ask the user to continue
@@ -692,8 +693,9 @@ class MasterAgent:
                 "function": {
                     "name": "update_finding_status",
                     "description": (
-                        "推进假设生命周期：suspected → confirmed → exploited。"
+                        "推进假设生命周期：suspected → confirmed → exploited → retracted。"
                         "claim 填要更新的原发现的子串即可。"
+                        "retracted 会级联 kill 依赖该发现的 Intent。"
                     ),
                     "parameters": {
                         "type": "object",
@@ -702,8 +704,9 @@ class MasterAgent:
                             "claim": {"type": "string"},
                             "status": {
                                 "type": "string",
-                                "enum": ["suspected", "confirmed", "exploited"],
+                                "enum": ["suspected", "confirmed", "exploited", "retracted"],
                             },
+                            "superseded_by": {"type": "string"},
                         },
                         "required": ["host", "claim", "status"],
                     },
@@ -1824,6 +1827,22 @@ class MasterAgent:
                 },
             )
         )
+        if self._current_intent_id:
+            self.frontier.tick(self._current_intent_id, 1)
+            key = (name, preview)
+            self._recent_tool_keys.append(key)
+            if len(self._recent_tool_keys) > 12:
+                self._recent_tool_keys.pop(0)
+            if (
+                len(self._recent_tool_keys) >= 3
+                and self._recent_tool_keys[-3:] == [key, key, key]
+            ):
+                self.frontier.kill(self._current_intent_id, "repeated_action")
+                self.publish_action(
+                    f"⚠ 检测到连续 3 次相同动作 {name}，当前意图已剪枝，"
+                    "请换路径或 intent_kill。"
+                )
+                self._current_intent_id = None
         try:
             await self.hooks.dispatch(
                 "post_tool",
@@ -2117,11 +2136,22 @@ class MasterAgent:
         host = args.get("host") or ""
         claim = args.get("claim") or ""
         status = args.get("status") or ""
-        finding = self.knowledge_base.update_finding_status(host, claim, status)
+        superseded_by = args.get("superseded_by") or ""
+        finding = self.knowledge_base.update_finding_status(
+            host, claim, status, superseded_by
+        )
         if finding is None:
             return json.dumps(
                 {"error": f"no finding on {host} matches claim substr or bad status"},
                 ensure_ascii=False,
+            )
+        if status == "retracted":
+            killed = self.frontier.invalidate(
+                f"{host}::{claim}", "dependency retracted"
+            )
+            self.publish_action(
+                f"⚠ Finding 已推翻（retracted）：{claim[:60]}；"
+                f"级联 kill {killed} 个依赖 Intent。"
             )
         self.blackboard.add(
             "findings", f"{host}: {finding.claim[:120]} [{status}]", author="master"
@@ -3518,6 +3548,17 @@ class MasterAgent:
             parallel_tool_calls=True,
             usage_callback=self._record_usage,
         )
+        intent_id = self.frontier.add_intent(
+            hypothesis=description[:200],
+            action=f"task:{agent_type or 'general'}",
+            priority=TaskPriority.RECON.value,
+            max_steps=sub.max_iterations,
+            expiry_s=float(sub.ttl),
+        )
+        if intent_id:
+            self.frontier.claim(intent_id)
+            self._current_intent_id = intent_id
+
         self.active_sub_agents[sub.agent_id] = sub
         task = asyncio.create_task(sub.run())
         self.active_sub_agent_tasks[sub.agent_id] = task
@@ -3526,6 +3567,13 @@ class MasterAgent:
         finally:
             self.active_sub_agent_tasks.pop(sub.agent_id, None)
             self.active_sub_agents.pop(sub.agent_id, None)
+        if intent_id:
+            if result.status is SubAgentStatus.DONE:
+                self.frontier.complete(intent_id, (result.text or "")[:200])
+            else:
+                self.frontier.kill(intent_id, result.error or result.status.value)
+            if self._current_intent_id == intent_id:
+                self._current_intent_id = None
 
         # L7 cross-agent: the sub-agent's full final answer becomes a shared
         # artifact (master keeps a pointer); findings flow via the shared KB.
@@ -4825,6 +4873,17 @@ class MasterAgent:
         findings_before = self.knowledge_base.finding_total()
         targets_before = {t["host"] for t in self.knowledge_base.list_targets()}
 
+        intent_id = self.frontier.add_intent(
+            hypothesis=task[:200],
+            action=f"{agent_type}@{target}",
+            priority=priority.value,
+            max_steps=sub.max_iterations,
+            expiry_s=float(sub.ttl),
+        )
+        if intent_id:
+            self.frontier.claim(intent_id)
+            self._current_intent_id = intent_id
+
         self.active_sub_agents[sub.agent_id] = sub
         task = asyncio.create_task(sub.run())
         self.active_sub_agent_tasks[sub.agent_id] = task
@@ -4834,6 +4893,13 @@ class MasterAgent:
             self.scheduler.task_completed(target)
             self.active_sub_agent_tasks.pop(sub.agent_id, None)
             self.active_sub_agents.pop(sub.agent_id, None)
+        if intent_id:
+            if result.status is SubAgentStatus.DONE:
+                self.frontier.complete(intent_id, (result.text or "")[:200])
+            else:
+                self.frontier.kill(intent_id, result.error or result.status.value)
+            if self._current_intent_id == intent_id:
+                self._current_intent_id = None
         result.findings = self.knowledge_base.findings_since(findings_before)
         result.new_targets = [
             h
