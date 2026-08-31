@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 # operations. Only this exact phrase approves; "y"/"n"/anything else denies.
 DESTROY_CONFIRMATION_PHRASE = "I CONFIRM DESTRUCTIVE ACTION"
 
+# After this many consecutive tool calls without a new Finding, inject an
+# Observer review with a causal replay of recent history (no auto-kill).
+STUCK_TICK_THRESHOLD = 6
+
 
 class MasterAgent:
     """Autonomous master agent driving a ReAct loop; integrates EventBus,
@@ -93,6 +97,9 @@ class MasterAgent:
         self.frontier: Frontier = Frontier()
         self._current_intent_id: str | None = None
         self._recent_tool_keys: list[tuple[str, str]] = []
+        self._stuck_ticks: int = 0
+        self._stuck_fact_baseline: int = 0
+        self._pending_observer_msg: str | None = None
         self._script_counter = 0
         self._retry_counts: dict[str, int] = {}
         # After this many tool calls in one turn, ask the user to continue
@@ -1844,6 +1851,15 @@ class MasterAgent:
                         "请换路径或 intent_kill。"
                     )
                     self._set_current_intent(None)
+                total = self.knowledge_base.finding_total()
+                if total > self._stuck_fact_baseline:
+                    self._stuck_fact_baseline = total
+                    self._stuck_ticks = 0
+                else:
+                    self._stuck_ticks += 1
+                    if self._stuck_ticks >= STUCK_TICK_THRESHOLD:
+                        self._stuck_ticks = 0
+                        self._flag_stuck_observer()
         try:
             await self.hooks.dispatch(
                 "post_tool",
@@ -2268,6 +2284,22 @@ class MasterAgent:
     def _set_current_intent(self, intent_id: str | None) -> None:
         self._current_intent_id = intent_id
         self._recent_tool_keys.clear()
+        self._stuck_ticks = 0
+        self._stuck_fact_baseline = self.knowledge_base.finding_total()
+
+    def _flag_stuck_observer(self) -> None:
+        events = self.frontier.history()[-20:]
+        replay = "\n".join(
+            f"- {e['type']}: {json.dumps(e['payload'], ensure_ascii=False)[:160]}"
+            for e in events
+        )
+        self._pending_observer_msg = (
+            "【Observer 卡死审视】当前意图连续多步无新 Fact，最近因果链：\n"
+            f"{replay or '(空)'}\n"
+            "请判断：是否已陷入死胡同？是 → intent_kill 并写明原因；"
+            "否 → 说明换什么动作继续。"
+        )
+        self.publish_action("⚠ Stuck Detector 触发：多步无新 Fact，注入因果重放审视…")
 
     def _tool_intent_claim(self, args: dict) -> str:
         iid = str(args.get("intent_id", ""))
@@ -4350,6 +4382,11 @@ class MasterAgent:
                 next_checkpoint += self.iteration_soft_threshold
 
             self.frontier.prune_expired()
+            if self._pending_observer_msg:
+                self.messages.append(
+                    {"role": "user", "content": self._pending_observer_msg}
+                )
+                self._pending_observer_msg = None
             request_messages = [
                 {"role": "system", "content": system_prompt + "\n\n" + self.frontier.view()},
                 *self.messages,
