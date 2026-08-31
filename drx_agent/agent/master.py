@@ -314,6 +314,15 @@ class MasterAgent:
                 f"消息={len(self.messages)} | 压缩次数={self._compaction_count} | "
                 f"产物={len(self.artifacts.list())}"
             )
+        elif text == "/ledger":
+            events = self.frontier.history()[-15:]
+            lines = [
+                f"- {e['type']}: {json.dumps(e['payload'], ensure_ascii=False)[:120]}"
+                for e in events
+            ]
+            self.publish_action(
+                "📜 作战账本（最近事件 / 召回轨迹）:\n" + ("\n".join(lines) or "(空)")
+            )
         elif text == "/memory":
             if self.project_memory:
                 preview = self.project_memory[:1000]
