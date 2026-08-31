@@ -433,6 +433,17 @@ class MasterAgent:
             "  credentials(凭据)/next_steps(下一步计划)。\n"
             "- blackboard_read(section?)：读某一区或全部。\n"
             "  重要进展随手上板；派子 Agent 前先看黑板；死路必须上板。\n"
+            "作战账本（Operation Ledger — 意图前沿队列与死路账）:\n"
+            "- intent_add(hypothesis, action, priority?, max_steps?, expiry_s?, depends_on?, evidence?)：\n"
+            "  提出想验证的假设和动作，进入前沿队列。hypothesis 是断言，action 是计划。\n"
+            "  依赖已记录 Finding 时用 depends_on 传 host::claim（来自 list_findings），\n"
+            "  该 Finding 被推翻时会级联 kill 此意图。\n"
+            "- intent_list()：查看前沿队列（open/claimed/done/dead）。\n"
+            "- intent_claim(intent_id)：认领一个 open Intent 开始执行。\n"
+            "- intent_done(intent_id, conclusion)：验证完成，写结论。\n"
+            "- intent_kill(intent_id, reason)：此路不通，记死路（禁止重复）。\n"
+            "  死胡同必须 intent_kill 而不是默默换方向；新想法必须 intent_add 而不是\n"
+            "  只写在回复里。前沿视图每轮自动注入，认领后执行它。\n"
             "\n"
             f"{METHODOLOGY_PROMPT}\n"
             f"\n【当前模式】{self.mode}。在 plan 模式下只能用只读工具（read/grep/"
@@ -478,6 +489,91 @@ class MasterAgent:
                             },
                         },
                         "required": ["url"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "intent_add",
+                    "description": (
+                        "向作战账本的前沿队列提出一个新意图：想验证的假设 + 计划动作。"
+                        "hypothesis 是断言（如『登录页有 SQLi』），action 是验证方式。"
+                        "依赖已记录 Finding 时用 depends_on 传 host::claim，该 Finding "
+                        "被推翻（retracted）时依赖它的 Intent 会被自动 kill。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "hypothesis": {"type": "string", "description": "想验证的断言"},
+                            "action": {"type": "string", "description": "计划怎么验证"},
+                            "priority": {"type": "integer", "description": "1-5，1 最高，默认 3"},
+                            "max_steps": {"type": "integer", "description": "预算步数，默认 8"},
+                            "expiry_s": {"type": "number", "description": "过期秒数，默认 900"},
+                            "depends_on": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "依赖的 Finding，格式 host::claim（来自 list_findings）",
+                            },
+                            "evidence": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "证据引用（artifact://id 或工具输出摘要）",
+                            },
+                        },
+                        "required": ["hypothesis", "action"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "intent_list",
+                    "description": "查看探索前沿队列（所有意图及其状态）。",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "intent_claim",
+                    "description": "认领一个 open 意图，表示现在开始执行它。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "intent_id": {"type": "string", "description": "意图 id"}
+                        },
+                        "required": ["intent_id"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "intent_done",
+                    "description": "意图验证完成，写入结论。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "intent_id": {"type": "string"},
+                            "conclusion": {"type": "string", "description": "结论/证据摘要"},
+                        },
+                        "required": ["intent_id", "conclusion"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "intent_kill",
+                    "description": "意图走不通，标记为死路并记录原因（禁止重复尝试）。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "intent_id": {"type": "string"},
+                            "reason": {"type": "string", "description": "为什么走不通"},
+                        },
+                        "required": ["intent_id", "reason"],
                     },
                 },
             },
@@ -1562,6 +1658,16 @@ class MasterAgent:
                 result_text = self._tool_blackboard_write(args)
             elif name == "blackboard_read":
                 result_text = self._tool_blackboard_read(args)
+            elif name == "intent_add":
+                result_text = self._tool_intent_add(args)
+            elif name == "intent_list":
+                result_text = self._tool_intent_list(args)
+            elif name == "intent_claim":
+                result_text = self._tool_intent_claim(args)
+            elif name == "intent_done":
+                result_text = self._tool_intent_done(args)
+            elif name == "intent_kill":
+                result_text = self._tool_intent_kill(args)
             elif name == "cred_add":
                 result_text = self._tool_cred_add(args)
             elif name == "cred_list":
@@ -2068,6 +2174,62 @@ class MasterAgent:
                 ensure_ascii=False,
             )
         return json.dumps(self.blackboard.to_dict(), ensure_ascii=False)
+
+    def _tool_intent_add(self, args: dict) -> str:
+        iid = self.frontier.add_intent(
+            hypothesis=str(args.get("hypothesis", "")),
+            action=str(args.get("action", "")),
+            priority=int(args.get("priority", 3) or 3),
+            max_steps=int(args.get("max_steps", 8) or 8),
+            expiry_s=float(args.get("expiry_s", 900.0) or 900.0),
+            depends_on=tuple(args.get("depends_on") or ()),
+            evidence=tuple(args.get("evidence") or ()),
+        )
+        if iid is None:
+            return json.dumps(
+                {"ok": False, "error": "empty hypothesis/action, or duplicate open intent"},
+                ensure_ascii=False,
+            )
+        return json.dumps({"ok": True, "intent_id": iid}, ensure_ascii=False)
+
+    def _tool_intent_list(self, args: dict) -> str:
+        intents = [
+            {
+                "id": i.id,
+                "hypothesis": i.hypothesis,
+                "action": i.action,
+                "status": i.status.value,
+                "priority": i.priority,
+                "steps_used": i.budget.steps_used,
+                "result": i.result,
+            }
+            for i in sorted(
+                self.frontier._intents.values(),
+                key=lambda i: (i.priority, i.budget.created_ts),
+            )
+        ]
+        return json.dumps({"intents": intents}, ensure_ascii=False)
+
+    def _tool_intent_claim(self, args: dict) -> str:
+        iid = str(args.get("intent_id", ""))
+        ok = self.frontier.claim(iid)
+        if ok:
+            self._current_intent_id = iid
+        return json.dumps({"ok": ok}, ensure_ascii=False)
+
+    def _tool_intent_done(self, args: dict) -> str:
+        iid = str(args.get("intent_id", ""))
+        ok = self.frontier.complete(iid, str(args.get("conclusion", "")))
+        if ok and self._current_intent_id == iid:
+            self._current_intent_id = None
+        return json.dumps({"ok": ok}, ensure_ascii=False)
+
+    def _tool_intent_kill(self, args: dict) -> str:
+        iid = str(args.get("intent_id", ""))
+        ok = self.frontier.kill(iid, str(args.get("reason", "")))
+        if ok and self._current_intent_id == iid:
+            self._current_intent_id = None
+        return json.dumps({"ok": ok}, ensure_ascii=False)
 
     async def _tool_dispatch_sub_agent(self, args: dict) -> str:
         agent_type = args.get("agent_type", "recon")
