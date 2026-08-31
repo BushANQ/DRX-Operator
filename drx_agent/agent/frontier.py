@@ -259,6 +259,42 @@ class Frontier:
     def history(self) -> list[dict]:
         return list(self._history)
 
+    def supporting_refs(
+        self,
+        intent_id: str,
+        scope: str | None = None,
+        max_depth: int = 3,
+    ) -> list[str]:
+        intent = self._intents.get(intent_id)
+        if intent is None:
+            return []
+        refs: list[str] = []
+        seen: set[str] = set()
+        stack: list[str] = list(intent.depends_on)
+        depth = 0
+        while stack and depth < max_depth:
+            nxt: list[str] = []
+            for dep in stack:
+                if dep in seen:
+                    continue
+                if scope and not dep.startswith(f"{scope}::"):
+                    continue
+                seen.add(dep)
+                refs.append(dep)
+                for child in self._enabled_by.get(dep, []):
+                    child_intent = self._intents.get(child)
+                    if child_intent is not None:
+                        nxt.extend(child_intent.depends_on)
+            stack = nxt
+            depth += 1
+        for i in self._intents.values():
+            if i.id == intent_id or i.status is not IntentStatus.DONE or not i.result:
+                continue
+            if scope and scope not in i.hypothesis and scope not in i.action:
+                continue
+            refs.append(f"{i.id}: {i.hypothesis} → {i.result}")
+        return refs
+
     def to_dict(self) -> dict:
         return {
             "intents": [
