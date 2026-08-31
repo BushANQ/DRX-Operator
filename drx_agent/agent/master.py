@@ -22,6 +22,7 @@ from drx_agent.agent.knowledge_base import Credential
 from drx_agent.agent.artifact_store import ArtifactStore
 from drx_agent.agent.prompts import METHODOLOGY_PROMPT, SUB_AGENT_DISCIPLINE
 from drx_agent.agent.sub_agent import SubAgent, SubAgentResult
+from drx_agent.agent.frontier import Frontier
 from drx_agent.agent.task_scheduler import TaskPriority, TaskScheduler
 from drx_agent.engine.bash_sandbox import BashSandbox, BLOCKED_PATTERNS
 from drx_agent.engine.python_sandbox import PythonSandbox, SandboxResult
@@ -89,6 +90,8 @@ class MasterAgent:
         self.running = True
         self.active_sub_agents: dict[str, SubAgent] = {}
         self.active_sub_agent_tasks: dict[str, asyncio.Task] = {}
+        self.frontier: Frontier = Frontier()
+        self._current_intent_id: str | None = None
         self._script_counter = 0
         self._retry_counts: dict[str, int] = {}
         # After this many tool calls in one turn, ask the user to continue
@@ -4096,8 +4099,9 @@ class MasterAgent:
                     return
                 next_checkpoint += self.iteration_soft_threshold
 
+            self.frontier.prune_expired()
             request_messages = [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": system_prompt + "\n\n" + self.frontier.view()},
                 *self.messages,
             ]
             self.event_bus.publish(
