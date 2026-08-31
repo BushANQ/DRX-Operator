@@ -1829,20 +1829,21 @@ class MasterAgent:
         )
         if self._current_intent_id:
             self.frontier.tick(self._current_intent_id, 1)
-            key = (name, preview)
-            self._recent_tool_keys.append(key)
-            if len(self._recent_tool_keys) > 12:
-                self._recent_tool_keys.pop(0)
-            if (
-                len(self._recent_tool_keys) >= 3
-                and self._recent_tool_keys[-3:] == [key, key, key]
-            ):
-                self.frontier.kill(self._current_intent_id, "repeated_action")
-                self.publish_action(
-                    f"⚠ 检测到连续 3 次相同动作 {name}，当前意图已剪枝，"
-                    "请换路径或 intent_kill。"
-                )
-                self._current_intent_id = None
+            if name != "intent_claim":
+                key = (name, preview)
+                self._recent_tool_keys.append(key)
+                if len(self._recent_tool_keys) > 12:
+                    self._recent_tool_keys.pop(0)
+                if (
+                    len(self._recent_tool_keys) >= 3
+                    and self._recent_tool_keys[-3:] == [key, key, key]
+                ):
+                    self.frontier.kill(self._current_intent_id, "repeated_action")
+                    self.publish_action(
+                        f"⚠ 检测到连续 3 次相同动作 {name}，当前意图已剪枝，"
+                        "请换路径或 intent_kill。"
+                    )
+                    self._set_current_intent(None)
         try:
             await self.hooks.dispatch(
                 "post_tool",
@@ -2149,6 +2150,10 @@ class MasterAgent:
             killed = self.frontier.invalidate(
                 f"{host}::{claim}", "dependency retracted"
             )
+            if claim != finding.claim:
+                killed += self.frontier.invalidate(
+                    f"{host}::{finding.claim}", "dependency retracted"
+                )
             self.publish_action(
                 f"⚠ Finding 已推翻（retracted）：{claim[:60]}；"
                 f"级联 kill {killed} 个依赖 Intent。"
@@ -2240,25 +2245,29 @@ class MasterAgent:
         ]
         return json.dumps({"intents": intents}, ensure_ascii=False)
 
+    def _set_current_intent(self, intent_id: str | None) -> None:
+        self._current_intent_id = intent_id
+        self._recent_tool_keys.clear()
+
     def _tool_intent_claim(self, args: dict) -> str:
         iid = str(args.get("intent_id", ""))
         ok = self.frontier.claim(iid)
         if ok:
-            self._current_intent_id = iid
+            self._set_current_intent(iid)
         return json.dumps({"ok": ok}, ensure_ascii=False)
 
     def _tool_intent_done(self, args: dict) -> str:
         iid = str(args.get("intent_id", ""))
         ok = self.frontier.complete(iid, str(args.get("conclusion", "")))
         if ok and self._current_intent_id == iid:
-            self._current_intent_id = None
+            self._set_current_intent(None)
         return json.dumps({"ok": ok}, ensure_ascii=False)
 
     def _tool_intent_kill(self, args: dict) -> str:
         iid = str(args.get("intent_id", ""))
         ok = self.frontier.kill(iid, str(args.get("reason", "")))
         if ok and self._current_intent_id == iid:
-            self._current_intent_id = None
+            self._set_current_intent(None)
         return json.dumps({"ok": ok}, ensure_ascii=False)
 
     async def _tool_dispatch_sub_agent(self, args: dict) -> str:
@@ -3557,7 +3566,7 @@ class MasterAgent:
         )
         if intent_id:
             self.frontier.claim(intent_id)
-            self._current_intent_id = intent_id
+            self._set_current_intent(intent_id)
 
         self.active_sub_agents[sub.agent_id] = sub
         task = asyncio.create_task(sub.run())
@@ -3573,7 +3582,7 @@ class MasterAgent:
             else:
                 self.frontier.kill(intent_id, result.error or result.status.value)
             if self._current_intent_id == intent_id:
-                self._current_intent_id = None
+                self._set_current_intent(None)
 
         # L7 cross-agent: the sub-agent's full final answer becomes a shared
         # artifact (master keeps a pointer); findings flow via the shared KB.
@@ -4882,7 +4891,7 @@ class MasterAgent:
         )
         if intent_id:
             self.frontier.claim(intent_id)
-            self._current_intent_id = intent_id
+            self._set_current_intent(intent_id)
 
         self.active_sub_agents[sub.agent_id] = sub
         task = asyncio.create_task(sub.run())
@@ -4899,7 +4908,7 @@ class MasterAgent:
             else:
                 self.frontier.kill(intent_id, result.error or result.status.value)
             if self._current_intent_id == intent_id:
-                self._current_intent_id = None
+                self._set_current_intent(None)
         result.findings = self.knowledge_base.findings_since(findings_before)
         result.new_targets = [
             h
