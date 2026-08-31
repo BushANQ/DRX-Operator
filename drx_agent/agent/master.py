@@ -2245,6 +2245,26 @@ class MasterAgent:
         ]
         return json.dumps({"intents": intents}, ensure_ascii=False)
 
+    def _focused_context(self, intent_id: str, scope: str | None = None) -> str:
+        refs = self.frontier.supporting_refs(intent_id, scope=scope)
+        lines: list[str] = []
+        for ref in refs:
+            if "::" in ref:
+                host, claim = ref.split("::", 1)
+                resolved = self._kb_claim_text(host, claim)
+                lines.append(f"- [Fact] {host}: {resolved or claim}")
+            else:
+                lines.append(f"- {ref}")
+        if not lines:
+            return ""
+        return "【聚焦上下文 — 支撑本意图的事实链】\n" + "\n".join(lines[:12])
+
+    def _kb_claim_text(self, host: str, claim: str) -> str:
+        for f_host, finding in self.knowledge_base.all_findings():
+            if f_host == host and claim.lower() in finding.claim.lower():
+                return f"[{finding.status}] {finding.claim}"
+        return ""
+
     def _set_current_intent(self, intent_id: str | None) -> None:
         self._current_intent_id = intent_id
         self._recent_tool_keys.clear()
@@ -2254,7 +2274,8 @@ class MasterAgent:
         ok = self.frontier.claim(iid)
         if ok:
             self._set_current_intent(iid)
-        return json.dumps({"ok": ok}, ensure_ascii=False)
+        ctx = self._focused_context(iid) if ok else ""
+        return json.dumps({"ok": ok, "context": ctx[:800]}, ensure_ascii=False)
 
     def _tool_intent_done(self, args: dict) -> str:
         iid = str(args.get("intent_id", ""))
@@ -3576,6 +3597,9 @@ class MasterAgent:
         if intent_id:
             self.frontier.claim(intent_id)
             _intent_holder["id"] = intent_id
+            ctx = self._focused_context(intent_id, scope=None)
+            if ctx:
+                sub.system_prompt = sub.system_prompt + "\n\n" + ctx
 
         self.active_sub_agents[sub.agent_id] = sub
         task = asyncio.create_task(sub.run())
@@ -4908,6 +4932,9 @@ class MasterAgent:
         if intent_id:
             self.frontier.claim(intent_id)
             _intent_holder["id"] = intent_id
+            ctx = self._focused_context(intent_id, scope=target)
+            if ctx:
+                sub.system_prompt = sub.system_prompt + "\n\n" + ctx
 
         self.active_sub_agents[sub.agent_id] = sub
         task = asyncio.create_task(sub.run())
