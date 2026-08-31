@@ -1829,7 +1829,7 @@ class MasterAgent:
         )
         if self._current_intent_id:
             self.frontier.tick(self._current_intent_id, 1)
-            if name != "intent_claim":
+            if not name.startswith("intent_"):
                 key = (name, preview)
                 self._recent_tool_keys.append(key)
                 if len(self._recent_tool_keys) > 12:
@@ -3543,13 +3543,22 @@ class MasterAgent:
             if t["function"]["name"] != "task"
         ]
 
+        _intent_holder: dict[str, str] = {}
+
+        async def _sub_executor(name: str, tool_args: dict) -> str:
+            res = await self._execute_tool(name, tool_args)
+            iid = _intent_holder.get("id")
+            if iid:
+                self.frontier.tick(iid, 1)
+            return res
+
         sub = SubAgent(
             agent_type=agent_type or "general",
             target="(sub-agent)",
             task=description,
             event_bus=self.event_bus,
             llm_provider=self.llm_provider,
-            tool_executor=self._execute_tool,
+            tool_executor=_sub_executor,
             tool_schemas=tools,
             system_prompt=sub_system,
             ttl=300,
@@ -3566,7 +3575,7 @@ class MasterAgent:
         )
         if intent_id:
             self.frontier.claim(intent_id)
-            self._set_current_intent(intent_id)
+            _intent_holder["id"] = intent_id
 
         self.active_sub_agents[sub.agent_id] = sub
         task = asyncio.create_task(sub.run())
@@ -3581,8 +3590,6 @@ class MasterAgent:
                 self.frontier.complete(intent_id, (result.text or "")[:200])
             else:
                 self.frontier.kill(intent_id, result.error or result.status.value)
-            if self._current_intent_id == intent_id:
-                self._set_current_intent(None)
 
         # L7 cross-agent: the sub-agent's full final answer becomes a shared
         # artifact (master keeps a pointer); findings flow via the shared KB.
@@ -4853,13 +4860,22 @@ class MasterAgent:
             if t["function"]["name"] != "task"
         ]
 
+        _intent_holder: dict[str, str] = {}
+
+        async def _sub_executor(name: str, tool_args: dict) -> str:
+            res = await self._execute_tool(name, tool_args)
+            iid = _intent_holder.get("id")
+            if iid:
+                self.frontier.tick(iid, 1)
+            return res
+
         sub = SubAgent(
             agent_type=agent_type,
             target=target,
             task=task,
             event_bus=self.event_bus,
             llm_provider=self.llm_provider,
-            tool_executor=self._execute_tool,
+            tool_executor=_sub_executor,
             tool_schemas=tools,
             system_prompt=sub_system,
             ttl=300,
@@ -4891,7 +4907,7 @@ class MasterAgent:
         )
         if intent_id:
             self.frontier.claim(intent_id)
-            self._set_current_intent(intent_id)
+            _intent_holder["id"] = intent_id
 
         self.active_sub_agents[sub.agent_id] = sub
         task = asyncio.create_task(sub.run())
@@ -4907,8 +4923,6 @@ class MasterAgent:
                 self.frontier.complete(intent_id, (result.text or "")[:200])
             else:
                 self.frontier.kill(intent_id, result.error or result.status.value)
-            if self._current_intent_id == intent_id:
-                self._set_current_intent(None)
         result.findings = self.knowledge_base.findings_since(findings_before)
         result.new_targets = [
             h

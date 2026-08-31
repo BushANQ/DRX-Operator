@@ -327,6 +327,7 @@ class DrxAgent:
                 self.master.frontier = Frontier.from_dict(
                     restored.get("frontier") or {}
                 )
+                self.master.frontier.rebase_budgets()
                 self.master.mode = restored.get("mode", "act") or "act"
                 if restored.get("session_usage"):
                     self.master.session_usage.update(restored["session_usage"])

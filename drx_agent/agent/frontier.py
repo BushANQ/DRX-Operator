@@ -98,6 +98,8 @@ class Frontier:
     ) -> str | None:
         hypothesis = (hypothesis or "").strip()[:200]
         action = (action or "").strip()[:200]
+        if isinstance(depends_on, str):
+            depends_on = (depends_on,)
         if not hypothesis or not action:
             return None
         for intent in self._intents.values():
@@ -198,6 +200,11 @@ class Frontier:
             self.kill(intent_id, "budget exhausted")
             return IntentStatus.DEAD
         return intent.status
+
+    def rebase_budgets(self, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        for intent in self._intents.values():
+            intent.budget.created_ts = now
 
     def prune_expired(self, now: float | None = None) -> int:
         now = time.time() if now is None else now
