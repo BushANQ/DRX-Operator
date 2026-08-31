@@ -23,6 +23,7 @@ from drx_agent.engine.bash_sandbox import BashSandbox
 from drx_agent.engine.script_library import ScriptLibrary
 from drx_agent.skills.registry import SkillsRegistry
 from drx_agent.session.manager import SessionManager
+from drx_agent.agent.frontier import Frontier
 from drx_agent.llm.base import LLMConfig
 from drx_agent.mcp.manager import MCPManager
 from drx_agent.hooks.manager import HookManager
@@ -282,6 +283,7 @@ class DrxAgent:
                     todos=getattr(self.master, 'todos', []),
                     mode=getattr(self.master, 'mode', 'act'),
                     session_usage=getattr(self.master, 'session_usage', {}),
+                    frontier=getattr(self.master, 'frontier', Frontier()).to_dict(),
                 )
                 self.event_bus.publish(Event(
                     type=EventType.AGENT_MESSAGE,
@@ -322,6 +324,9 @@ class DrxAgent:
                 self.master.knowledge_base = restored["kb"]
                 self.master.messages = restored.get("messages", [])
                 self.master.todos = restored.get("todos", [])
+                self.master.frontier = Frontier.from_dict(
+                    restored.get("frontier") or {}
+                )
                 self.master.mode = restored.get("mode", "act") or "act"
                 if restored.get("session_usage"):
                     self.master.session_usage.update(restored["session_usage"])

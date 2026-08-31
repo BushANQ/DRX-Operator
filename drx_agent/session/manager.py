@@ -10,7 +10,7 @@ class SessionManager:
         self.store = SessionStore(storage_dir)
 
     def save(self, kb, messages, active_targets, name="", phase="",
-             todos=None, mode="", session_usage=None) -> str:
+             todos=None, mode="", session_usage=None, frontier=None) -> str:
         session_id = str(uuid.uuid4())[:12]
         self.store.save_session(
             session_id=session_id,
@@ -23,6 +23,7 @@ class SessionManager:
                 "todos": todos or [],
                 "mode": mode or "act",
                 "session_usage": session_usage or {},
+                "frontier": frontier or {},
             },
         )
         return session_id
@@ -42,6 +43,7 @@ class SessionManager:
             "todos": extra.get("todos", []),
             "mode": extra.get("mode", "act"),
             "session_usage": extra.get("session_usage", {}),
+            "frontier": extra.get("frontier", {}),
         }
 
     def checkpoint(self, kb, phase, messages, active_targets) -> str:
