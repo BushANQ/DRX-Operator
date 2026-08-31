@@ -1,0 +1,285 @@
+"""Typed frontier: intent queue + dead-end log + append-only history ledger.
+
+Makes "what to try next" a system asset instead of model memory. Facts
+live in the knowledge base; intents live here. Backtracking = popping
+the next open intent after one dies. Every state transition is appended
+to an immutable history buffer (the operation ledger); a derived view
+is rendered for the LLM each loop iteration. Fact retraction cascades
+through the enabled_by reverse index to kill dependent intents.
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+
+MAX_INTENTS = 60
+MAX_DEAD_ENDS = 40
+HISTORY_CAP = 500
+
+
+class IntentStatus(str, Enum):
+    OPEN = "open"
+    CLAIMED = "claimed"
+    DONE = "done"
+    DEAD = "dead"
+
+
+@dataclass
+class IntentBudget:
+    """Mutable counters — budget is consumed as the intent runs."""
+
+    max_steps: int = 8
+    expiry_s: float = 900.0
+    created_ts: float = field(default_factory=time.time)
+    steps_used: int = 0
+
+
+@dataclass
+class Intent:
+    id: str
+    hypothesis: str
+    action: str
+    priority: int = 3
+    status: IntentStatus = IntentStatus.OPEN
+    budget: IntentBudget = field(default_factory=IntentBudget)
+    depends_on: tuple[str, ...] = ()
+    evidence: tuple[str, ...] = ()
+    actor: str = "master"
+    spawned_from: str | None = None
+    result: str = ""
+    resolved_by: str | None = None
+
+    def expired(self, now: float) -> bool:
+        return now - self.budget.created_ts > self.budget.expiry_s
+
+    def exhausted(self) -> bool:
+        return self.budget.steps_used >= self.budget.max_steps
+
+
+@dataclass(frozen=True)
+class DeadEnd:
+    intent_id: str
+    hypothesis: str
+    reason: str
+    ts: float = field(default_factory=time.time)
+
+
+class Frontier:
+    def __init__(self) -> None:
+        self._intents: dict[str, Intent] = {}
+        self._dead_ends: list[DeadEnd] = []
+        self._enabled_by: dict[str, list[str]] = {}
+        self._history: list[dict] = []
+
+    def _append_event(self, type_: str, payload: dict) -> str:
+        eid = f"evt-{uuid.uuid4().hex[:6]}"
+        self._history.append(
+            {"event_id": eid, "type": type_, "ts": time.time(), "payload": payload}
+        )
+        if len(self._history) > HISTORY_CAP:
+            del self._history[: len(self._history) - HISTORY_CAP]
+        return eid
+
+    def add_intent(
+        self,
+        hypothesis: str,
+        action: str,
+        *,
+        priority: int = 3,
+        max_steps: int = 8,
+        expiry_s: float = 900.0,
+        depends_on: tuple[str, ...] = (),
+        evidence: tuple[str, ...] = (),
+        actor: str = "master",
+        spawned_from: str | None = None,
+    ) -> str | None:
+        hypothesis = (hypothesis or "").strip()[:200]
+        action = (action or "").strip()[:200]
+        if not hypothesis or not action:
+            return None
+        for intent in self._intents.values():
+            if (
+                intent.status in (IntentStatus.OPEN, IntentStatus.CLAIMED)
+                and intent.hypothesis == hypothesis
+                and intent.action == action
+            ):
+                return None
+        if len(self._intents) >= MAX_INTENTS:
+            oldest = min(self._intents.values(), key=lambda i: i.budget.created_ts)
+            self._intents.pop(oldest.id, None)
+        iid = f"it-{uuid.uuid4().hex[:6]}"
+        self._intents[iid] = Intent(
+            id=iid,
+            hypothesis=hypothesis,
+            action=action,
+            priority=priority,
+            budget=IntentBudget(
+                max_steps=max_steps, expiry_s=expiry_s, created_ts=time.time()
+            ),
+            depends_on=tuple(depends_on),
+            evidence=tuple(evidence),
+            actor=actor[:60],
+            spawned_from=spawned_from,
+        )
+        for dep in depends_on:
+            self._enabled_by.setdefault(dep, []).append(iid)
+        self._append_event(
+            "intent.added",
+            {"intent_id": iid, "hypothesis": hypothesis, "actor": actor},
+        )
+        return iid
+
+    def by_id(self, intent_id: str) -> Intent | None:
+        return self._intents.get(intent_id)
+
+    def claim(self, intent_id: str) -> bool:
+        intent = self._intents.get(intent_id)
+        if intent is None or intent.status is not IntentStatus.OPEN:
+            return False
+        intent.status = IntentStatus.CLAIMED
+        self._append_event("intent.claimed", {"intent_id": intent_id})
+        return True
+
+    def complete(self, intent_id: str, conclusion: str) -> bool:
+        intent = self._intents.get(intent_id)
+        if intent is None or intent.status is not IntentStatus.CLAIMED:
+            return False
+        intent.status = IntentStatus.DONE
+        intent.result = (conclusion or "")[:200]
+        intent.resolved_by = self._append_event(
+            "intent.done", {"intent_id": intent_id, "conclusion": intent.result}
+        )
+        return True
+
+    def kill(self, intent_id: str, reason: str) -> bool:
+        intent = self._intents.get(intent_id)
+        if intent is None or intent.status not in (IntentStatus.OPEN, IntentStatus.CLAIMED):
+            return False
+        intent.status = IntentStatus.DEAD
+        intent.result = (reason or "")[:200]
+        intent.resolved_by = self._append_event(
+            "intent.killed", {"intent_id": intent_id, "reason": intent.result}
+        )
+        self._dead_ends.append(
+            DeadEnd(intent_id=intent_id, hypothesis=intent.hypothesis, reason=intent.result)
+        )
+        if len(self._dead_ends) > MAX_DEAD_ENDS:
+            del self._dead_ends[: len(self._dead_ends) - MAX_DEAD_ENDS]
+        return True
+
+    def enabled_by(self, fact_ref: str) -> list[str]:
+        return list(self._enabled_by.get(fact_ref, []))
+
+    def invalidate(self, fact_ref: str, reason: str) -> int:
+        """Kill open/claimed intents depending on a retracted fact."""
+        killed = 0
+        for iid in list(self._enabled_by.get(fact_ref, [])):
+            intent = self._intents.get(iid)
+            if intent is not None and intent.status in (
+                IntentStatus.OPEN,
+                IntentStatus.CLAIMED,
+            ):
+                self.kill(iid, reason)
+                killed += 1
+        self._append_event(
+            "fact.invalidated", {"fact_ref": fact_ref, "killed": killed}
+        )
+        return killed
+
+    def list_open(self) -> list[Intent]:
+        items = [i for i in self._intents.values() if i.status is IntentStatus.OPEN]
+        items.sort(key=lambda i: (i.priority, i.budget.created_ts))
+        return items
+
+    def dead_ends(self) -> list[DeadEnd]:
+        return list(self._dead_ends)
+
+    def history(self) -> list[dict]:
+        return list(self._history)
+
+    def to_dict(self) -> dict:
+        return {
+            "intents": [
+                {
+                    "id": i.id,
+                    "hypothesis": i.hypothesis,
+                    "action": i.action,
+                    "priority": i.priority,
+                    "status": i.status.value,
+                    "budget": {
+                        "max_steps": i.budget.max_steps,
+                        "expiry_s": i.budget.expiry_s,
+                        "created_ts": i.budget.created_ts,
+                        "steps_used": i.budget.steps_used,
+                    },
+                    "depends_on": list(i.depends_on),
+                    "evidence": list(i.evidence),
+                    "actor": i.actor,
+                    "spawned_from": i.spawned_from,
+                    "result": i.result,
+                    "resolved_by": i.resolved_by,
+                }
+                for i in self._intents.values()
+            ],
+            "dead_ends": [
+                {"intent_id": d.intent_id, "hypothesis": d.hypothesis,
+                 "reason": d.reason, "ts": d.ts}
+                for d in self._dead_ends
+            ],
+            "enabled_by": self._enabled_by,
+            "history": self._history,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Frontier":
+        f = cls()
+        for raw in (data or {}).get("intents") or []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                status = IntentStatus(raw.get("status", "open"))
+            except ValueError:
+                continue
+            b = raw.get("budget") or {}
+            intent = Intent(
+                id=raw.get("id", ""),
+                hypothesis=raw.get("hypothesis", ""),
+                action=raw.get("action", ""),
+                priority=int(raw.get("priority", 3) or 3),
+                status=status,
+                budget=IntentBudget(
+                    max_steps=int(b.get("max_steps", 8) or 8),
+                    expiry_s=float(b.get("expiry_s", 900.0) or 900.0),
+                    created_ts=float(b.get("created_ts", 0.0) or 0.0),
+                    steps_used=int(b.get("steps_used", 0) or 0),
+                ),
+                depends_on=tuple(raw.get("depends_on") or ()),
+                evidence=tuple(raw.get("evidence") or ()),
+                actor=raw.get("actor", "master"),
+                spawned_from=raw.get("spawned_from"),
+                result=raw.get("result", ""),
+                resolved_by=raw.get("resolved_by"),
+            )
+            f._intents[intent.id] = intent
+        for raw in (data or {}).get("dead_ends") or []:
+            if isinstance(raw, dict) and raw.get("intent_id"):
+                f._dead_ends.append(
+                    DeadEnd(
+                        intent_id=raw["intent_id"],
+                        hypothesis=raw.get("hypothesis", ""),
+                        reason=raw.get("reason", ""),
+                        ts=float(raw.get("ts", 0.0) or 0.0),
+                    )
+                )
+        f._enabled_by = {
+            k: list(v)
+            for k, v in ((data or {}).get("enabled_by") or {}).items()
+            if isinstance(v, list)
+        }
+        f._history = [
+            e for e in ((data or {}).get("history") or []) if isinstance(e, dict)
+        ]
+        return f
