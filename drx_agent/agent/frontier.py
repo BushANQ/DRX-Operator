@@ -189,6 +189,58 @@ class Frontier:
         )
         return killed
 
+    def tick(self, intent_id: str, steps: int = 1) -> IntentStatus | None:
+        intent = self._intents.get(intent_id)
+        if intent is None or intent.status is not IntentStatus.CLAIMED:
+            return None
+        intent.budget.steps_used += steps
+        if intent.exhausted():
+            self.kill(intent_id, "budget exhausted")
+            return IntentStatus.DEAD
+        return intent.status
+
+    def prune_expired(self, now: float | None = None) -> int:
+        now = time.time() if now is None else now
+        killed = 0
+        for intent in list(self._intents.values()):
+            if (
+                intent.status in (IntentStatus.OPEN, IntentStatus.CLAIMED)
+                and intent.expired(now)
+            ):
+                self.kill(intent.id, "expired")
+                killed += 1
+        return killed
+
+    def view(self, max_chars: int = 1200) -> str:
+        open_items = self.list_open()[:5]
+        claimed = [
+            i for i in self._intents.values()
+            if i.status is IntentStatus.CLAIMED
+        ][:3]
+        lines = ["【探索前沿 Frontier — 待验证意图队列】"]
+        if open_items:
+            lines.append("◆ 待认领 Intent（按优先级）:")
+            for i in open_items:
+                lines.append(
+                    f"  - [{i.id}] 假设: {i.hypothesis} | 动作: {i.action} "
+                    f"| 预算 {i.budget.steps_used}/{i.budget.max_steps} 步"
+                )
+        if claimed:
+            lines.append("◆ 进行中:")
+            for i in claimed:
+                lines.append(f"  - [{i.id}] {i.hypothesis} — {i.action}")
+        recent = self._dead_ends[-3:]
+        if recent:
+            lines.append("◆ 最近死路（禁止重复）:")
+            for d in recent:
+                lines.append(f"  - {d.hypothesis} — {d.reason}")
+        if not open_items and not claimed and not recent:
+            lines.append("  (空 — 用 intent_add 提出想验证的假设)")
+        text = "\n".join(lines)
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n  ...(前沿截断)"
+        return text
+
     def list_open(self) -> list[Intent]:
         items = [i for i in self._intents.values() if i.status is IntentStatus.OPEN]
         items.sort(key=lambda i: (i.priority, i.budget.created_ts))
