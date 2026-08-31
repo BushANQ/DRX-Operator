@@ -100,6 +100,7 @@ class MasterAgent:
         self._stuck_ticks: int = 0
         self._stuck_fact_baseline: int = 0
         self._pending_observer_msg: str | None = None
+        self._sub_exec_depth: int = 0
         self._script_counter = 0
         self._retry_counts: dict[str, int] = {}
         # After this many tool calls in one turn, ask the user to continue
@@ -1860,15 +1861,16 @@ class MasterAgent:
                         "请换路径或 intent_kill。"
                     )
                     self._set_current_intent(None)
-                total = self.knowledge_base.finding_total()
-                if total > self._stuck_fact_baseline:
-                    self._stuck_fact_baseline = total
-                    self._stuck_ticks = 0
-                else:
-                    self._stuck_ticks += 1
-                    if self._stuck_ticks >= STUCK_TICK_THRESHOLD:
+                if self._sub_exec_depth == 0:
+                    total = self.knowledge_base.finding_total()
+                    if total > self._stuck_fact_baseline:
+                        self._stuck_fact_baseline = total
                         self._stuck_ticks = 0
-                        self._flag_stuck_observer()
+                    else:
+                        self._stuck_ticks += 1
+                        if self._stuck_ticks >= STUCK_TICK_THRESHOLD:
+                            self._stuck_ticks = 0
+                            self._flag_stuck_observer()
         try:
             await self.hooks.dispatch(
                 "post_tool",
@@ -3608,7 +3610,11 @@ class MasterAgent:
         _intent_holder: dict[str, str] = {}
 
         async def _sub_executor(name: str, tool_args: dict) -> str:
-            res = await self._execute_tool(name, tool_args)
+            self._sub_exec_depth += 1
+            try:
+                res = await self._execute_tool(name, tool_args)
+            finally:
+                self._sub_exec_depth -= 1
             iid = _intent_holder.get("id")
             if iid:
                 self.frontier.tick(iid, 1)
@@ -4933,7 +4939,11 @@ class MasterAgent:
         _intent_holder: dict[str, str] = {}
 
         async def _sub_executor(name: str, tool_args: dict) -> str:
-            res = await self._execute_tool(name, tool_args)
+            self._sub_exec_depth += 1
+            try:
+                res = await self._execute_tool(name, tool_args)
+            finally:
+                self._sub_exec_depth -= 1
             iid = _intent_holder.get("id")
             if iid:
                 self.frontier.tick(iid, 1)
