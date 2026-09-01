@@ -14,6 +14,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Callable
 
 MAX_INTENTS = 60
 MAX_DEAD_ENDS = 40
@@ -73,6 +74,7 @@ class Frontier:
         self._dead_ends: list[DeadEnd] = []
         self._enabled_by: dict[str, list[str]] = {}
         self._history: list[dict] = []
+        self.on_invalidate: Callable[[str, str, list[str]], None] | None = None
 
     def _append_event(self, type_: str, payload: dict) -> str:
         eid = f"evt-{uuid.uuid4().hex[:6]}"
@@ -145,6 +147,13 @@ class Frontier:
         self._append_event("intent.claimed", {"intent_id": intent_id})
         return True
 
+    def release(self, intent_id: str) -> bool:
+        intent = self._intents.get(intent_id)
+        if intent is None or intent.status is not IntentStatus.CLAIMED:
+            return False
+        intent.status = IntentStatus.OPEN
+        return True
+
     def complete(self, intent_id: str, conclusion: str) -> bool:
         intent = self._intents.get(intent_id)
         if intent is None or intent.status is not IntentStatus.CLAIMED:
@@ -178,6 +187,7 @@ class Frontier:
     def invalidate(self, fact_ref: str, reason: str) -> int:
         """Kill open/claimed intents depending on a retracted fact."""
         killed = 0
+        killed_ids: list[str] = []
         for iid in list(self._enabled_by.get(fact_ref, [])):
             intent = self._intents.get(iid)
             if intent is not None and intent.status in (
@@ -186,9 +196,12 @@ class Frontier:
             ):
                 self.kill(iid, reason)
                 killed += 1
+                killed_ids.append(iid)
         self._append_event(
             "fact.invalidated", {"fact_ref": fact_ref, "killed": killed}
         )
+        if self.on_invalidate is not None:
+            self.on_invalidate(fact_ref, reason, killed_ids)
         return killed
 
     def tick(self, intent_id: str, steps: int = 1) -> IntentStatus | None:
