@@ -2428,7 +2428,7 @@ class MasterAgent:
         sub_system += "\n" + self.blackboard.render(1500) + "\n"
         tools = [
             t for t in self._build_tool_schemas()
-            if t["function"]["name"] != "task"
+            if t["function"]["name"] not in ("task", "intent_batch")
         ]
 
         _intent_holder: dict[str, str] = {"id": intent.id}
@@ -3776,7 +3776,7 @@ class MasterAgent:
         )
         tools = [
             t for t in self._build_tool_schemas()
-            if t["function"]["name"] != "task"
+            if t["function"]["name"] not in ("task", "intent_batch")
         ]
 
         _intent_holder: dict[str, str] = {}
@@ -5109,7 +5109,7 @@ class MasterAgent:
                 sub_system += "\n【专业技能参考】\n" + "\n---\n".join(skill_blocks)
         tools = [
             t for t in self._build_tool_schemas()
-            if t["function"]["name"] != "task"
+            if t["function"]["name"] not in ("task", "intent_batch")
         ]
 
         _intent_holder: dict[str, str] = {}
