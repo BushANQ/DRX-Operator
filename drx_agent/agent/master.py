@@ -464,6 +464,8 @@ class MasterAgent:
             "- intent_kill(intent_id, reason)：此路不通，记死路（禁止重复）。\n"
             "  死胡同必须 intent_kill 而不是默默换方向；新想法必须 intent_add 而不是\n"
             "  只写在回复里。前沿视图每轮自动注入，认领后执行它。\n"
+            "- intent_batch(max_workers?, scope?, priority_cap?)：蜂群并行——多个 Worker\n"
+            "  同时认领不同 open 意图并发探索。有多条独立路径要试时用它。\n"
             "\n"
             f"{METHODOLOGY_PROMPT}\n"
             f"\n【当前模式】{self.mode}。在 plan 模式下只能用只读工具（read/grep/"
@@ -509,6 +511,24 @@ class MasterAgent:
                             },
                         },
                         "required": ["url"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "intent_batch",
+                    "description": (
+                        "蜂群并行探索：从前沿队列认领至多 max_workers 个 open 意图，"
+                        "每个派一个同能力 Worker 并发执行。用于多条路径并行试探。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "max_workers": {"type": "integer", "description": "并行数，1-4，默认 4"},
+                            "scope": {"type": "string", "description": "只认领假设/动作含此字符串的意图"},
+                            "priority_cap": {"type": "integer", "description": "只认领 priority <= 此值的意图，默认 3"},
+                        },
                     },
                 },
             },
@@ -1700,6 +1720,8 @@ class MasterAgent:
                 result_text = self._tool_cred_show(args)
             elif name == "dispatch_sub_agent":
                 result_text = await self._tool_dispatch_sub_agent(args)
+            elif name == "intent_batch":
+                result_text = await self._tool_intent_batch(args)
             elif name == "read_file":
                 result_text = self._tool_read_file(
                     args.get("path", ""),
@@ -1846,7 +1868,7 @@ class MasterAgent:
                 },
             )
         )
-        if self._current_intent_id:
+        if self._current_intent_id and self._sub_exec_depth == 0:
             self.frontier.tick(self._current_intent_id, 1)
             if not name.startswith("intent_"):
                 key = (name, preview)
@@ -2386,6 +2408,131 @@ class MasterAgent:
                 "new_targets": list(getattr(result, "new_targets", None) or [])[:10],
             },
             ensure_ascii=False,
+        )
+
+    def _target_from_intent(self, intent) -> str:
+        for dep in intent.depends_on:
+            if "::" in dep:
+                return dep.split("::", 1)[0]
+        return "frontier-batch"
+
+    def _build_worker(self, intent, target: str, agent_type: str) -> SubAgent:
+        sub_system = (
+            f"你是一个并行探索 Worker（type={agent_type}）。"
+            "主 Agent 从前沿队列分派给你一个已认领的意图，独立完成验证。\n"
+            f"意图 hypothesis: {intent.hypothesis}\n"
+            f"意图 action: {intent.action}\n"
+            "完成后返回简洁结论；失败如实汇报。"
+        )
+        sub_system += SUB_AGENT_DISCIPLINE
+        sub_system += "\n" + self.blackboard.render(1500) + "\n"
+        tools = [
+            t for t in self._build_tool_schemas()
+            if t["function"]["name"] != "task"
+        ]
+
+        _intent_holder: dict[str, str] = {"id": intent.id}
+
+        async def _sub_executor(name: str, tool_args: dict) -> str:
+            self._sub_exec_depth += 1
+            try:
+                res = await self._execute_tool(name, tool_args)
+            finally:
+                self._sub_exec_depth -= 1
+            iid = _intent_holder.get("id")
+            if iid:
+                self.frontier.tick(iid, 1)
+            return res
+
+        if target != "frontier-batch":
+            ctx = self._focused_context(intent.id, scope=target)
+            if ctx:
+                sub_system += "\n\n" + ctx
+        return SubAgent(
+            agent_type=agent_type,
+            target=target,
+            task=f"{intent.hypothesis} —— {intent.action}",
+            event_bus=self.event_bus,
+            llm_provider=self.llm_provider,
+            tool_executor=_sub_executor,
+            tool_schemas=tools,
+            system_prompt=sub_system,
+            ttl=300,
+            max_iterations=12,
+            parallel_tool_calls=True,
+            usage_callback=self._record_usage,
+        )
+
+    async def _dispatch_frontier_batch(
+        self,
+        max_workers: int = 4,
+        scope: str | None = None,
+        priority_cap: int = 3,
+        agent_type: str = "general",
+    ) -> list[dict]:
+        max_workers = max(1, min(int(max_workers), 4))
+        candidates = [
+            i for i in self.frontier.list_open()
+            if i.priority <= priority_cap
+        ]
+        if scope:
+            candidates = [
+                i for i in candidates
+                if scope in i.hypothesis or scope in i.action
+            ]
+        pending: list[tuple] = []
+        for intent in candidates[:max_workers]:
+            if not self.frontier.claim(intent.id):
+                continue
+            target = self._target_from_intent(intent)
+            if not self.scheduler.try_acquire(target):
+                self.frontier.release(intent.id)
+                self.publish_action(
+                    f"Worker skipped — target {target} at capacity, "
+                    f"intent {intent.id} released"
+                )
+                continue
+            sub = self._build_worker(intent, target, agent_type)
+            task = asyncio.create_task(sub.run())
+            self.active_sub_agents[sub.agent_id] = sub
+            self.active_sub_agent_tasks[sub.agent_id] = task
+            self._intent_agent_map[intent.id] = sub.agent_id
+            pending.append((intent, target, sub.agent_id, task))
+        results: list[dict] = []
+        for intent, target, agent_id, task in pending:
+            try:
+                result = await task
+            finally:
+                self.scheduler.task_completed(target)
+                self.active_sub_agent_tasks.pop(agent_id, None)
+                self.active_sub_agents.pop(agent_id, None)
+                self._intent_agent_map.pop(intent.id, None)
+            if result.status is SubAgentStatus.DONE:
+                self.frontier.complete(intent.id, (result.text or "")[:200])
+            else:
+                self.frontier.kill(
+                    intent.id, result.error or result.status.value
+                )
+            results.append(
+                {
+                    "intent_id": intent.id,
+                    "hypothesis": intent.hypothesis[:80],
+                    "status": result.status.value,
+                    "text": (result.text or "")[:200],
+                    "error": result.error or "",
+                }
+            )
+        return results
+
+    async def _tool_intent_batch(self, args: dict) -> str:
+        scope = args.get("scope")
+        summary = await self._dispatch_frontier_batch(
+            max_workers=int(args.get("max_workers", 4) or 4),
+            scope=str(scope) if scope else None,
+            priority_cap=int(args.get("priority_cap", 3) or 3),
+        )
+        return json.dumps(
+            {"ok": True, "results": summary}, ensure_ascii=False
         )
 
 
