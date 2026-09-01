@@ -95,6 +95,8 @@ class MasterAgent:
         self.active_sub_agents: dict[str, SubAgent] = {}
         self.active_sub_agent_tasks: dict[str, asyncio.Task] = {}
         self.frontier: Frontier = Frontier()
+        self._intent_agent_map: dict[str, str] = {}
+        self.frontier.on_invalidate = self._on_frontier_invalidate
         self._current_intent_id: str | None = None
         self._recent_tool_keys: list[tuple[str, str]] = []
         self._stuck_ticks: int = 0
@@ -2312,6 +2314,29 @@ class MasterAgent:
         )
         self.publish_action("⚠ Stuck Detector 触发：多步无新 Fact，注入因果重放审视…")
 
+    def _on_frontier_invalidate(
+        self, fact_ref: str, reason: str, killed_ids: list[str]
+    ) -> None:
+        # 回调防御：异常只记录，不穿透到 invalidate 调用方、不破坏 retraction 返回。
+        try:
+            for iid in killed_ids:
+                agent_id = self._intent_agent_map.pop(iid, None)
+                if agent_id is None:
+                    continue
+                sub = self.active_sub_agents.get(agent_id)
+                if sub is not None:
+                    sub.request_stop()
+                task = self.active_sub_agent_tasks.get(agent_id)
+                if task is not None and not task.done():
+                    task.cancel()
+                self.publish_action(
+                    f"⚠ 事实被推翻（{fact_ref[:60]}）：已中断依赖它的运行中子 Agent {agent_id}"
+                )
+        except Exception:  # noqa: BROAD_EXCEPT_OK
+            logging.getLogger(__name__).exception(
+                "on_frontier_invalidate callback failed"
+            )
+
     def _tool_intent_claim(self, args: dict) -> str:
         iid = str(args.get("intent_id", ""))
         ok = self.frontier.claim(iid)
@@ -3644,6 +3669,7 @@ class MasterAgent:
         if intent_id:
             self.frontier.claim(intent_id)
             _intent_holder["id"] = intent_id
+            self._intent_agent_map[intent_id] = sub.agent_id
             ctx = self._focused_context(intent_id, scope=None)
             if ctx:
                 sub.system_prompt = sub.system_prompt + "\n\n" + ctx
@@ -3656,6 +3682,8 @@ class MasterAgent:
         finally:
             self.active_sub_agent_tasks.pop(sub.agent_id, None)
             self.active_sub_agents.pop(sub.agent_id, None)
+            if intent_id:
+                self._intent_agent_map.pop(intent_id, None)
         if intent_id:
             if result.status is SubAgentStatus.DONE:
                 self.frontier.complete(intent_id, (result.text or "")[:200])
@@ -4347,6 +4375,7 @@ class MasterAgent:
                 task.cancel()
         self.active_sub_agent_tasks.clear()
         self.active_sub_agents.clear()
+        self._intent_agent_map.clear()
         try:
             self.shells.close_all()
         except Exception:
@@ -4988,6 +5017,7 @@ class MasterAgent:
         if intent_id:
             self.frontier.claim(intent_id)
             _intent_holder["id"] = intent_id
+            self._intent_agent_map[intent_id] = sub.agent_id
             ctx = self._focused_context(intent_id, scope=target)
             if ctx:
                 sub.system_prompt = sub.system_prompt + "\n\n" + ctx
@@ -5001,6 +5031,8 @@ class MasterAgent:
             self.scheduler.task_completed(target)
             self.active_sub_agent_tasks.pop(sub.agent_id, None)
             self.active_sub_agents.pop(sub.agent_id, None)
+            if intent_id:
+                self._intent_agent_map.pop(intent_id, None)
         if intent_id:
             if result.status is SubAgentStatus.DONE:
                 self.frontier.complete(intent_id, (result.text or "")[:200])
