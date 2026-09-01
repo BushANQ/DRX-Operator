@@ -102,6 +102,7 @@ class MasterAgent:
         self._stuck_ticks: int = 0
         self._stuck_fact_baseline: int = 0
         self._pending_observer_msg: str | None = None
+        self.swarm_mode: bool = False
         self._sub_exec_depth: int = 0
         self._script_counter = 0
         self._retry_counts: dict[str, int] = {}
@@ -301,6 +302,16 @@ class MasterAgent:
             self.publish_action(
                 f"当前模式: {self.mode}（{'只读工具' if self.mode == 'plan' else '所有工具'}）"
             )
+        elif text.startswith("/swarm"):
+            parts = text.split()
+            if len(parts) >= 2 and parts[1] in ("on", "off"):
+                self.swarm_mode = parts[1] == "on"
+            else:
+                self.swarm_mode = not self.swarm_mode
+            self.publish_action(
+                f"🐜 蜂群模式：{'开启' if self.swarm_mode else '关闭'}。"
+                "开启后，前沿队列的 open 意图将由系统自动并行派发。"
+            )
         elif text == "/dream":
             await self._dream()
         elif text == "/progress":
@@ -471,6 +482,9 @@ class MasterAgent:
             f"\n【当前模式】{self.mode}。在 plan 模式下只能用只读工具（read/grep/"
             "web_search/cve_lookup/http_fetch/parse_*/todo_write/list_findings/"
             "blackboard_read）；write/edit/exec/shell/dispatch 全部被拒。用户切到 /act 才能动手。\n"
+            f"【蜂群模式】{'开启' if self.swarm_mode else '关闭'}。"
+            "开启时：多路径探索用 intent_add 建假设即可，系统自动并行执行；"
+            "关闭时：需要并行则手动调用 intent_batch。\n"
             "\n"
             f"【当前知识库】targets=[{target_summary}], owned={owned}。\n"
             f"【发现(Findings)】\n{findings_summary}\n"
@@ -4578,6 +4592,21 @@ class MasterAgent:
                     {"role": "user", "content": self._pending_observer_msg}
                 )
                 self._pending_observer_msg = None
+            if self.swarm_mode and self._current_intent_id is None:
+                summary = await self._dispatch_frontier_batch(max_workers=4)
+                if summary:
+                    lines = "\n".join(
+                        f"- [{r['status']}] {r['hypothesis']}: "
+                        f"{(r['text'] or r['error'] or '')[:120]}"
+                        for r in summary
+                    )
+                    self.messages.append(
+                        {"role": "user", "content": f"【蜂群并行结果】\n{lines}"}
+                    )
+                    self.publish_action(
+                        f"🐜 蜂群并行完成 {len(summary)} 个意图"
+                    )
+                    continue
             request_messages = [
                 {"role": "system", "content": system_prompt + "\n\n" + self.frontier.view()},
                 *self.messages,
