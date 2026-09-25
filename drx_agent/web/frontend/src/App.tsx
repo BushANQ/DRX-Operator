@@ -311,7 +311,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
               </ReactFlow>
             )}
           </div>
-          <div className="canvas-context"><span>{graphView === 'execution' ? '执行图' : '因果图'}</span><span>{graphView === 'execution' ? '任务与记录归属' : '已保存的证据关系'}</span><span>{loading || error ? '未读取' : `${projected.nodes.length} / ${semanticGraph.nodes.length} 节点 · ${projected.edges.length} 条关系`}</span></div>
+          <div className="canvas-context"><span>{graphView === 'execution' ? '执行图' : '因果图'}</span><span>{graphView === 'execution' ? '任务与记录归属' : '已保存的证据关系'}</span><span>{loading || error || graphMissing ? '未读取' : `${projected.nodes.length} / ${semanticGraph.nodes.length} 节点 · ${projected.edges.length} 条关系`}</span></div>
           {!loading && !error && <div className={`canvas-playback-state ${isPlaying ? 'is-playing' : ''}`} aria-live="polite">{isPlaying ? <Play size={13} weight="fill" /> : <Pause size={13} />}<span>{playbackLabel}</span></div>}
           <div className="graph-tools" role="group" aria-label="图谱操作">
             <button className="icon-button" disabled={graphDisabled} aria-label="放大图谱" title="放大" onClick={() => { setFollow(false); void flow?.zoomIn({ duration: 160 }); }}><Plus size={17} /></button>
