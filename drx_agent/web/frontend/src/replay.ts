@@ -60,5 +60,5 @@ export function projectReplay(
 export function isReplayShortcut(event: KeyboardEvent): boolean {
   return !event.defaultPrevented && !event.altKey && !event.metaKey && !event.ctrlKey
     && !(event.target instanceof Element
-      && event.target.closest('input, textarea, button, select, summary, a, [contenteditable], [role="button"]'));
+      && event.target.closest('input, textarea, button, select, summary, a, [contenteditable], [role="button"], .action-items-list, .detail-panel-body, .session-sidebar'));
 }
