@@ -1,16 +1,48 @@
-# React + Vite
+# 会话回放前端
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+使用 React、TypeScript 和 React Flow，读取现有 Web 服务的会话接口。
+维护的源码、测试和 Vite 配置均为 TypeScript；浏览器资源由 Vite 构建生成。
 
-Currently, two official plugins are available:
+## 开发
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+使用 Node.js 24 或更新版本。在本目录运行：
 
-## React Compiler
+```sh
+npm ci
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+开发服务器将 `/api` 和 `/ws` 转发到本机 7300 端口。已有 Python 环境中，可在仓库根目录启动回放服务：
 
-## Expanding the Oxlint configuration
+```sh
+python3 -m drx_agent.web.launcher --no-agent --no-browser --host 127.0.0.1 --port 7300
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+## 检查与构建
+
+```sh
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
+`build` 包含严格类型检查，产物在 `dist/`，由 Python Web 服务提供。构建产物不纳入 Git 提交。
+
+## 交互
+
+- 左侧按名称或 ID 搜索会话，侧边按钮可折叠会话列表和日志面板。
+- 执行图按任务、对话回合和工具调用的记录归属构建分层树，支持分支折叠。因果图独立展示已保存事实、证据、假设及其显式关系。
+- 拖动、缩放后停止视野跟随；点击图谱的跟随按钮恢复。
+- 点击节点或日志打开详情，可查看原始实体及关系来源；拖动标题栏调整位置，Escape 关闭。
+- 日志上翻后暂停自动跟随，点击“跟随当前”恢复。
+- 执行图中空格播放或暂停，左右方向键切换记录；表单、日志和详情区域保留原生键盘行为。
+- 首次打开显示保存的执行结构，宽树维持可读比例，可用“查看全图”查看全部节点；播放或拖动回放条后按记录揭示节点；关系字段不足时只标记记录分组，不推断因果。
+- 记录缺失字段显示“无”，已知空列表计数为 0；读取失败单独显示错误，未知数量不显示成 0。
+- 详情复制保持原始内容，JSON 展示格式化保留原有数字精度和重复字段。
+
+## 图数据
+
+会话接口的 `graphs.execution` 与 `graphs.causal` 分别提供执行结构和已记录的因果关系。执行图优先使用明确的任务、父节点与调用标识；旧会话只有对话内容时，按可核对的记录归属显示分组，分组边不表示任务依赖或安全结论。
+
+每个语义节点保留 `source`，每条边保留 `sourceInfo`。详情可查看节点关系及来源。缺少的证据关联不补造；无法唯一解析的引用保留为未解析引用。节点状态来自保存快照，回放只定位已有记录，不推断未记录的中间状态。
