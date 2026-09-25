@@ -208,7 +208,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
                 >
                   <Background color="#203041" gap={24} size={1} />
                   <Controls showFitView={false} showInteractive={false} />
-                  <MiniMap nodeColor={(node) => node.data.color ?? '#4897ad'} pannable zoomable />
+                  <MiniMap nodeColor={(node) => node.data.color ?? '#4897ad'} maskColor="rgba(4, 9, 17, 0.72)" pannable zoomable />
                 </ReactFlow>
               )}
             </div>
