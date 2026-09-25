@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import os
 import sqlite3
@@ -12,7 +13,7 @@ class SessionStore:
 
     def _init_db(self):
         db_path = os.path.join(self.storage_dir, "sessions.db")
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY, name TEXT, created_at REAL,
                 phase TEXT, metadata TEXT)""")
@@ -34,7 +35,7 @@ class SessionStore:
             "kb_data": kb_data,
         }, ensure_ascii=False)
         db_path = os.path.join(self.storage_dir, "sessions.db")
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
                 """INSERT OR REPLACE INTO sessions
                    (id, name, created_at, phase, metadata, snapshot)
@@ -44,7 +45,7 @@ class SessionStore:
 
     def load_session(self, session_id):
         db_path = os.path.join(self.storage_dir, "sessions.db")
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn, conn:
             row = conn.execute(
                 "SELECT id, name, created_at, phase, metadata, snapshot "
                 "FROM sessions WHERE id = ?", (session_id,)
@@ -88,7 +89,7 @@ class SessionStore:
 
     def list_sessions(self):
         db_path = os.path.join(self.storage_dir, "sessions.db")
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn, conn:
             rows = conn.execute(
                 "SELECT id, name, created_at, phase FROM sessions ORDER BY created_at DESC"
             ).fetchall()
