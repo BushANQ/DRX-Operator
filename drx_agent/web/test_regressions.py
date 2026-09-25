@@ -10,6 +10,20 @@ def snapshot(records=None, kb=None):
 
 
 class DashboardRegressions(unittest.TestCase):
+    def test_legacy_tool_result_is_matched_without_invented_timestamp(self):
+        raw = snapshot()
+        raw["metadata"]["extra"] = {}
+        raw["messages"] = [
+            {"role": "assistant", "tool_calls": [{"id": "one", "function": {
+                "name": "example", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "one", "content": "recorded response"},
+        ]
+        actions = _session_to_graph(raw)["actions"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["fullOutput"], "recorded response")
+        self.assertIsNone(actions[0]["timestamp"])
+        self.assertIsNone(actions[0]["status"])
+
     def test_time_status_and_stages_come_only_from_recorded_events(self):
         records = [{"kind": "tool", "tool": "example", "timestamp": timestamp, "status": status}
                    for timestamp, status in [(1000, "error"), (1060, "running"), (4600, "done")]]

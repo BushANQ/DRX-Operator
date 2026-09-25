@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-from drx_agent.web.graph import _target_summary, _timestamp, _time_offset, _explicit_stage
+from drx_agent.web.graph import _target_summary, _timestamp, _time_offset, _explicit_stage, _legacy_records
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +186,10 @@ def _session_to_graph(raw: dict) -> dict:
     graph with action stream, 9-stage milestone track, and rich metadata."""
     metadata = raw.get("metadata", {})
     extra = metadata.get("extra", {})
-    transcript_records = extra.get("transcript") or []
     messages = raw.get("messages", [])
+    transcript_records = extra.get("transcript")
+    if transcript_records is None:
+        transcript_records = _legacy_records(messages)
     kb_data = raw.get("kb_data", {})
 
     # Extract target host
@@ -482,48 +484,6 @@ def _session_to_graph(raw: dict) -> dict:
                 "stageTitle": stage_title,
                 "data": rec,
             })
-    else:
-        # Fallback from messages
-        for i, msg in enumerate(messages):
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-            actor = msg.get("agent_id", "master")
-            if isinstance(content, list):
-                content = " ".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
-
-            if role == "user":
-                raw_actions.append({
-                    "category": "调度",
-                    "title": f"任务启动 · {str(content)[:35]}",
-                    "actor": actor,
-                    "tool": "",
-                    "input": str(content),
-                    "output": "",
-                    "thought": "",
-                })
-            elif role == "assistant":
-                raw_actions.append({
-                    "category": "推理",
-                    "title": f"认知推理 · {str(content)[:35]}",
-                    "actor": actor,
-                    "tool": "",
-                    "input": "",
-                    "output": "",
-                    "thought": str(content),
-                })
-            for call in msg.get("tool_calls", []):
-                fn = call.get("function", {})
-                t_name = fn.get("name", "tool")
-                raw_actions.append({
-                    "category": "探测" if "fetch" in t_name or "search" in t_name else "利用",
-                    "title": f"执行工具 · {t_name}",
-                    "actor": actor,
-                    "tool": t_name,
-                    "input": fn.get("arguments", ""),
-                    "output": "",
-                    "thought": "",
-                })
-
     # Keep every recorded operation, including repeated calls with distinct inputs.
     condensed = raw_actions
     if not condensed:
