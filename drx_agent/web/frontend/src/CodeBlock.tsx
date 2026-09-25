@@ -1,11 +1,12 @@
 import { useMemo } from 'react';
+import { formatJsonText } from './codeText.ts';
 
 interface CodeBlockProps { value: string; output?: boolean }
 
 export default function CodeBlock({ value, output = false }: CodeBlockProps) {
   const content = useMemo(() => {
-    let formatted: string;
-    try { formatted = JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
+    const formatted = formatJsonText(value);
+    if (formatted === null) return value;
     if (formatted.length > 50000) return formatted;
     const expression = /"(?:\\.|[^"\\])*"\s*:|"(?:\\.|[^"\\])*"|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
     const parts: Array<{ text: string; tone: string }> = [];
