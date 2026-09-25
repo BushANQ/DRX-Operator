@@ -3,17 +3,18 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 const SPEED_OPTIONS = [0.5, 1, 2, 4];
 
 export default function TopReplayBanner({
-  sessionName = 'test',
+  sessionName = '无会话',
   sessions = [],
   selectedSessionId,
   onSelectSession,
   currentAction,
   currentStep = 0,
-  totalSteps = 38,
+  totalSteps = 0,
   stages = [],
   actions = [],
   activeStageKey = '推理',
   isPlaying = false,
+  disabled = false,
   onTogglePlay,
   speed = 1,
   onSetSpeed,
@@ -57,9 +58,9 @@ export default function TopReplayBanner({
     onStepChange(val);
   };
 
-  const stageTitle = currentAction?.stageTitle || '第 4 阶段 · 推理';
-  const stageTag = currentAction?.stageTag || '影响边界 战役推进中';
-  const timeOffset = currentAction?.timeOffset || 'T+1m35s';
+  const stageTitle = currentAction?.stageTitle || '阶段：无';
+  const stageTag = currentAction?.stageTag || '无阶段记录';
+  const timeOffset = currentAction?.timeOffset || '无时间记录';
 
   return (
     <div className="top-replay-dashboard">
@@ -146,6 +147,7 @@ export default function TopReplayBanner({
           {/* Play / Pause */}
           <button
             className="ctrl-btn primary-glow"
+            disabled={disabled}
             onClick={() => onTogglePlay(!isPlaying)}
             title={isPlaying ? '暂停' : '播放'}
           >
@@ -153,13 +155,14 @@ export default function TopReplayBanner({
           </button>
 
           {/* Reset */}
-          <button className="ctrl-btn secondary" onClick={onReset} title="重置回放">
+          <button className="ctrl-btn secondary" disabled={disabled} onClick={onReset} title="重置回放">
             重来
           </button>
 
           {/* Loop */}
           <button
             className={`ctrl-btn secondary ${isLoop ? 'active-loop' : ''}`}
+            disabled={disabled}
             onClick={onToggleLoop}
             title={isLoop ? '循环开启' : '循环关闭'}
           >
@@ -172,6 +175,7 @@ export default function TopReplayBanner({
               <button
                 key={s}
                 className={`speed-btn ${speed === s ? 'active' : ''}`}
+                disabled={disabled}
                 onClick={() => onSetSpeed(s)}
               >
                 {s}x
@@ -185,6 +189,7 @@ export default function TopReplayBanner({
           <input
             type="range"
             aria-label="回放动作进度"
+            disabled={disabled}
             min={0}
             max={Math.max(0, totalSteps - 1)}
             value={currentStep}
@@ -195,7 +200,7 @@ export default function TopReplayBanner({
 
         {/* Time and Step Indicator */}
         <div className="replay-timer-label">
-          {timeOffset} · 演练 · {currentStep + 1}/{totalSteps}
+          {timeOffset} · 演练 · {totalSteps ? currentStep + 1 : 0}/{totalSteps}
         </div>
       </div>
 
@@ -213,7 +218,7 @@ export default function TopReplayBanner({
             return (
               <button
                 type="button"
-                disabled={!st.count}
+                disabled={disabled || !st.count}
                 aria-pressed={isActive}
                 key={st.key}
                 className={`stage-milestone-step ${isActive ? 'active' : ''} ${

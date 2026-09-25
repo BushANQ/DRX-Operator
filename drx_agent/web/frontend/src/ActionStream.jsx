@@ -79,7 +79,7 @@ export default function ActionStream({
           <div className="action-stream-meta-bar">
             <span>动作流</span>
             <span className="stream-action-tally">
-              {currentStep + 1}/{actions.length} 条动作
+              {actions.length ? currentStep + 1 : 0}/{actions.length} 条动作
             </span>
           </div>
 
@@ -122,7 +122,8 @@ export default function ActionStream({
       )}
 
       {/* ---------------- 2. Detail Tab ---------------- */}
-      {activeTab === 'detail' && (
+      {activeTab === 'detail' && !selectedNode && !actions.length && <div className="detail-panel-body">无</div>}
+      {activeTab === 'detail' && (selectedNode || actions.length > 0) && (
         <div className="detail-panel-body animate-fade-in">
           {/* Node / Action Title Header */}
           <div className="detail-meta-card">

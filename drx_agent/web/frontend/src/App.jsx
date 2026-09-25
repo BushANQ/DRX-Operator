@@ -12,12 +12,16 @@ import '@xyflow/react/dist/style.css';
 import { nodeTypes } from './nodes';
 import TopReplayBanner from './TopReplayBanner';
 import ActionStream from './ActionStream';
+import { requestJSON } from './api.js';
 
 const API_BASE = ''; // Proxied in dev, same origin in prod
 
 export default function App() {
   // Sessions
   const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [retry, setRetry] = useState(0);
   const [selectedSessionId, setSelectedSessionId] = useState(null);
 
   // Graph Data
@@ -37,47 +41,66 @@ export default function App() {
 
   const timerRef = useRef(null);
 
-  // ---------------- 1. Fetch sessions ----------------
   useEffect(() => {
-    fetch(`${API_BASE}/api/sessions`)
-      .then((r) => r.json())
+    const controller = new AbortController();
+    let active = true;
+    setSessionsLoading(true);
+    setLoadError('');
+    requestJSON(`${API_BASE}/api/sessions`, { signal: controller.signal })
       .then((data) => {
-        setSessions(data || []);
-        if (data && data.length > 0) {
-          // Default to the richest session or first
-          const target = data.find((s) => s.id === '74b7e646-5aa') || data[0];
-          setSelectedSessionId(target.id);
+        if (!Array.isArray(data) || data.some((item) => typeof item?.id !== 'string')) {
+          throw new Error('会话列表格式无效');
         }
+        if (!active) return;
+        setSessions(data);
+        setSelectedSessionId((old) => data.some((item) => item.id === old) ? old : data[0]?.id ?? null);
       })
-      .catch((err) => console.error('Failed to fetch sessions:', err));
-  }, []);
+      .catch((error) => {
+        if (!active) return;
+        setSessions([]);
+        setSelectedSessionId(null);
+        setGraphData(null);
+        setNodes([]);
+        setEdges([]);
+        setLoadError(error.message);
+      })
+      .finally(() => { if (active) setSessionsLoading(false); });
+    return () => { active = false; controller.abort(); };
+  }, [retry, setNodes, setEdges]);
 
-  // ---------------- 2. Fetch session graph ----------------
   useEffect(() => {
-    if (!selectedSessionId) return;
-    setGraphLoading(true);
+    setGraphData(null);
+    setNodes([]);
+    setEdges([]);
     setSelectedNode(null);
     setCurrentStep(0);
     setIsPlaying(false);
-
-    fetch(`${API_BASE}/api/sessions/${selectedSessionId}`)
-      .then((r) => r.json())
+    setGraphLoading(Boolean(selectedSessionId));
+    if (!selectedSessionId) return;
+    const controller = new AbortController();
+    let active = true;
+    setGraphLoading(true);
+    setLoadError('');
+    requestJSON(`${API_BASE}/api/sessions/${encodeURIComponent(selectedSessionId)}`, { signal: controller.signal })
       .then((data) => {
+        if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges) || !Array.isArray(data.actions)
+            || data.summary?.sessionId !== selectedSessionId) {
+          throw new Error('会话数据格式或归属无效');
+        }
+        if (!active) return;
         setGraphData(data);
-        setNodes(data.nodes || []);
-        setEdges(data.edges || []);
-        setGraphLoading(false);
+        setNodes(data.nodes);
+        setEdges(data.edges);
       })
-      .catch((err) => {
-        console.error('Failed to fetch session graph:', err);
-        setGraphLoading(false);
-      });
-  }, [selectedSessionId, setNodes, setEdges]);
+      .catch((error) => { if (active) setLoadError(error.message); })
+      .finally(() => { if (active) setGraphLoading(false); });
+    return () => { active = false; controller.abort(); };
+  }, [selectedSessionId, retry, setNodes, setEdges]);
 
   const actions = graphData?.actions || [];
   const stages = graphData?.stages || [];
   const summary = graphData?.summary || {};
-  const totalSteps = actions.length || 1;
+  const totalSteps = actions.length;
   const currentAction = actions[currentStep] || {};
 
   useEffect(() => {
@@ -185,6 +208,7 @@ export default function App() {
     function handleKeyDown(e) {
       if (e.target.closest?.('input, textarea, button, select, a, [contenteditable="true"], [role="button"]')) return;
 
+      if (!totalSteps) return;
       if (e.code === 'Space') {
         e.preventDefault();
         setIsPlaying((p) => !p);
@@ -230,7 +254,7 @@ export default function App() {
       {fullscreenError && <div role="alert">{fullscreenError}</div>}
       {/* ---------------- Top Replay Dashboard Banner ---------------- */}
       <TopReplayBanner
-        sessionName={summary.name || selectedSessionId || 'test'}
+        sessionName={summary.name || selectedSessionId || '无会话'}
         sessions={sessions}
         selectedSessionId={selectedSessionId}
         onSelectSession={setSelectedSessionId}
@@ -239,7 +263,8 @@ export default function App() {
         totalSteps={totalSteps}
         stages={stages}
         actions={actions}
-        activeStageKey={currentAction.stageKey || '推理'}
+        activeStageKey={currentAction.stageKey || null}
+        disabled={sessionsLoading || graphLoading || !actions.length || Boolean(loadError)}
         isPlaying={isPlaying}
         onTogglePlay={setIsPlaying}
         speed={speed}
@@ -292,11 +317,18 @@ export default function App() {
             </div>
           </div>
 
-          {graphLoading ? (
+          {sessionsLoading || graphLoading ? (
             <div className="loading-container">
               <div className="cyber-spinner" />
               <div className="loading-text">正在加载研判会话图谱...</div>
             </div>
+          ) : loadError ? (
+            <div className="loading-container" role="alert">
+              <p>{loadError}</p>
+              <button onClick={() => setRetry((value) => value + 1)}>重新加载</button>
+            </div>
+          ) : !selectedSessionId || !actions.length ? (
+            <div className="loading-container">{selectedSessionId ? '无动作记录' : '无会话'}</div>
           ) : (
             <ReactFlow
               nodes={nodes}
