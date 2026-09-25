@@ -79,7 +79,7 @@ def _time_offset(seconds):
     if seconds is None:
         return None
     sign = "-" if seconds < 0 else "+"
-    seconds = abs(seconds)
+    seconds = round(abs(seconds), 2)
     minutes, remaining = divmod(seconds, 60)
     if minutes:
         return f"T{sign}{int(minutes)}m{remaining:05.2f}".rstrip("0").rstrip(".") + "s"

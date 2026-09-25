@@ -10,6 +10,14 @@ def snapshot(records=None, kb=None):
 
 
 class DashboardRegressions(unittest.TestCase):
+    def test_elapsed_labels_are_readable_without_changing_recorded_time(self):
+        records = [{"kind": "message", "timestamp": value, "text": "record"}
+                   for value in [1000, 1003.523662, 1059.999]]
+        actions = _session_to_graph(snapshot(records))["actions"]
+        self.assertEqual(actions[1]["timeOffset"], "T+3.52s")
+        self.assertAlmostEqual(actions[1]["timeSeconds"], 3.523662)
+        self.assertEqual(actions[2]["timeOffset"], "T+1m00s")
+
     def test_legacy_tool_result_is_matched_without_invented_timestamp(self):
         raw = snapshot()
         raw["metadata"]["extra"] = {}
