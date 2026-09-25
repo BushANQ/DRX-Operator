@@ -94,6 +94,7 @@ export default function ActionStream({
                   className={`action-stream-item ${isActive ? 'active-item' : ''}`}
                   onClick={() => {
                     onSelectStep(i);
+                    setActiveTab('detail');
                   }}
                 >
                   <div className="action-item-time">{act.timeOffset}</div>

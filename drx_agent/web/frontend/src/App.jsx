@@ -80,6 +80,10 @@ export default function App() {
   const totalSteps = actions.length || 1;
   const currentAction = actions[currentStep] || {};
 
+  useEffect(() => {
+    setSelectedNode(null);
+  }, [currentStep]);
+
   // ---------------- 3. Replay: Update node highlight / lit states ----------------
   useEffect(() => {
     if (!graphData || !graphData.nodes) return;
@@ -334,13 +338,7 @@ export default function App() {
           currentStep={currentStep}
           onSelectStep={(step) => {
             setCurrentStep(step);
-            const act = actions[step];
-            if (act) {
-              const matchedNode = nodes.find((n) => n.id === act.cardId);
-              if (matchedNode) {
-                setSelectedNode(matchedNode);
-              }
-            }
+            setSelectedNode(null);
           }}
           selectedNode={selectedNode}
           summary={summary}
