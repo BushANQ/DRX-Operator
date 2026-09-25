@@ -32,287 +32,254 @@ def project(raw):
 
 class SemanticGraphTests(unittest.TestCase):
     def assert_valid(self, graph):
-        nodes = {node["id"]: node for node in graph["nodes"]}
+        nodes = {node["id"] for node in graph["nodes"]}
         self.assertEqual(len(nodes), len(graph["nodes"]))
-        for node in nodes.values():
-            self.assertTrue({"id", "label", "kind", "status", "actionId", "step", "source"} <= node.keys())
         for edge in graph["edges"]:
             self.assertIn(edge["source"], nodes)
             self.assertIn(edge["target"], nodes)
             self.assertNotEqual(edge["source"], edge["target"])
-            self.assertTrue({"id", "source", "target", "relation", "label", "sourceInfo"} <= edge.keys())
+            self.assertTrue(edge["sourceInfo"])
+
+    def execution(self, raw):
+        graph, actions = project(raw)
+        self.assert_valid(graph["execution"])
+        return graph["execution"], actions
+
+    def test_single_agent_graph_contains_only_main_task_plans_and_tools(self):
+        context = "【宿主运行状态 — 完整快照，后出现的快照替代先前快照】\nRecorded state"
+        raw = session([message("u", "user", "Actual request"), message("a", "assistant", "Plan"),
+                       message("ctx", "user", context), tool("t"), message("reply", "assistant", "Result")],
+                      messages=[{"role": "user", "content": context}], extra={"todos": [{"id": "a", "content": "Task A"}, {"id": "b", "content": "Task B"}]})
+        graph, actions = self.execution(raw)
+        self.assertEqual(5, len(actions))
+        self.assertEqual({"root", "task", "tool"}, {node["kind"] for node in graph["nodes"]})
+        root = next(node for node in graph["nodes"] if node["kind"] == "root")
+        self.assertEqual("Actual request", root["label"])
+        self.assertEqual(raw["messages"], root["source"]["record"]["messages"])
+        self.assertEqual([action["id"] for action in actions], root["source"]["logActionIds"])
+
+    def test_assistant_context_and_system_logs_do_not_invent_a_main_task(self):
+        context = "【宿主运行状态 — 完整快照，后出现的快照替代先前快照】\nRecorded state"
+        raw = session([message("assistant", "assistant", "Saved reply"), message("context", "user", context),
+                       message("system", "system", "System log")])
+        raw["name"] = "Saved session name"
+        graph, actions = self.execution(raw)
+        self.assertEqual(3, len(actions))
+        self.assertEqual({"nodes": [], "edges": []}, graph)
+
+    def test_context_only_legacy_history_remains_logs_without_execution_nodes(self):
+        context = "【宿主运行状态 — 完整快照，后出现的快照替代先前快照】\nRecorded state"
+        graph, actions = self.execution(session(messages=[{"role": "user", "content": context}]))
+        self.assertEqual(1, len(actions))
+        self.assertEqual(context, actions[0]["text"])
+        self.assertEqual([], graph["nodes"])
+
+    def test_real_user_request_without_tools_has_one_unknown_status_main_task(self):
+        graph, actions = self.execution(session([message("request", "user", "Real request")]))
+        self.assertEqual(1, len(actions))
+        self.assertEqual(1, len(graph["nodes"]))
+        self.assertEqual("root", graph["nodes"][0]["kind"])
+        self.assertEqual("Real request", graph["nodes"][0]["label"])
+        self.assertIsNone(graph["nodes"][0]["status"])
+        self.assertEqual([], graph["edges"])
+
+    def test_saved_plan_list_is_a_labeled_plan_order_backbone(self):
+        graph, _ = self.execution(session([], extra={"todos": [{"id": "a", "content": "A"}, {"id": "b", "content": "B"}, {"id": "c", "content": "C"}]}))
+        self.assertEqual(2, sum(edge["relation"] == "plan_order" for edge in graph["edges"]))
+        self.assertFalse(any(edge["relation"] == "dependency" for edge in graph["edges"]))
+
+    def test_explicit_plan_dependency_retains_multiple_predecessors(self):
+        graph, _ = self.execution(session([], extra={"todos": [{"id": "a", "content": "A"}, {"id": "b", "content": "B"},
+                                                              {"id": "c", "content": "C", "depends_on": ["a", "b"]}]}))
+        edges = [edge for edge in graph["edges"] if edge["relation"] == "dependency"]
+        self.assertEqual(2, len(edges))
+        self.assertEqual(1, len({edge["target"] for edge in edges}))
+        self.assertFalse(any(edge["relation"] == "plan_order" for edge in graph["edges"]))
+
+    def test_duplicate_plan_ids_remain_distinct_and_do_not_bind_tools(self):
+        ctx = {"version": 1, "actor": "master", "task_id": "same"}
+        graph, _ = self.execution(session([tool("one", data={"execution_context": ctx})], extra={"todos": [
+            {"id": "same", "content": "First"}, {"id": "same", "content": "Second"},
+        ]}))
+        tasks = [node for node in graph["nodes"] if node["kind"] == "task"]
+        self.assertEqual(2, len(tasks))
+        self.assertEqual(2, len({node["id"] for node in tasks}))
+        self.assertEqual({"First", "Second"}, {node["label"] for node in tasks})
+        self.assertEqual("unrecorded", next(node for node in graph["nodes"] if node["kind"] == "tool")["source"]["taskAssociation"])
+
+    def test_legacy_parent_id_can_reference_a_saved_task(self):
+        graph, _ = self.execution(session([tool("one", data={"parent_id": "a"})], extra={"todos": [{"id": "a", "content": "A"}]}))
+        task = next(node for node in graph["nodes"] if node["kind"] == "task")
+        child = next(node for node in graph["nodes"] if node["kind"] == "tool")
+        self.assertTrue(any(edge["source"] == task["id"] and edge["target"] == child["id"] and edge["sourceInfo"]["field"] == "parent_id" for edge in graph["edges"]))
+
+    def test_unassociated_different_actors_are_not_linked_as_serial(self):
+        graph, _ = self.execution(session([tool("one", actor="a"), tool("two", actor="b"), tool("three", actor="a")]))
+        nodes = {node["id"]: node for node in graph["nodes"]}
+        order = [edge for edge in graph["edges"] if edge["relation"] == "record_order"]
+        self.assertEqual(1, len(order))
+        self.assertEqual("a", nodes[order[0]["source"]]["source"]["actor"])
+        self.assertEqual("a", nodes[order[0]["target"]]["source"]["actor"])
+        self.assertFalse(any(node["kind"] == "worker_task" for node in graph["nodes"]))
+
+    def test_explicit_previous_turn_overrides_nearest_saved_round(self):
+        base = {"version": 1, "actor": "master", "run_id": "run", "request_id": "request"}
+        graph, actions = self.execution(session([
+            tool("one", data={"execution_context": {**base, "turn_id": "first"}}),
+            tool("two", data={"execution_context": {**base, "turn_id": "middle"}}),
+            tool("three", data={"execution_context": {**base, "turn_id": "last", "previous_turn_id": "first"}}),
+        ]))
+        by_action = {node["actionId"]: node["id"] for node in graph["nodes"] if node["kind"] == "tool"}
+        edge = next(edge for edge in graph["edges"] if edge["target"] == by_action[actions[2]["id"]])
+        self.assertEqual(by_action[actions[0]["id"]], edge["source"])
+        self.assertEqual("previous_turn_id", edge["sourceInfo"]["field"])
+        self.assertEqual("first", edge["sourceInfo"]["value"])
+
+    def test_captured_same_round_tools_share_a_parent_without_sibling_edges(self):
+        ctx = {"version": 1, "actor": "master", "turn_id": "round-1", "task_id": "a"}
+        graph, _ = self.execution(session([tool("one", data={"execution_context": ctx}), tool("two", data={"execution_context": ctx})],
+                                         extra={"todos": [{"id": "a", "content": "A"}]}))
+        tools = [node for node in graph["nodes"] if node["kind"] == "tool"]
+        incoming = [{edge["source"] for edge in graph["edges"] if edge["target"] == node["id"]} for node in tools]
+        self.assertEqual(incoming[0], incoming[1])
+        self.assertEqual(1, len(incoming[0]))
+        self.assertFalse(any(edge["source"] in {node["id"] for node in tools} for edge in graph["edges"]))
+
+    def test_captured_active_plan_is_distinct_from_explicit_task_binding(self):
+        active = {"id": "a", "content": "A", "status": "in_progress"}
+        ctx = {"version": 1, "actor": "master", "turn_id": "r", "active_task": active, "active_tasks": [active]}
+        graph, _ = self.execution(session([tool("one", data={"execution_context": ctx})], extra={"todos": [active]}))
+        node = next(node for node in graph["nodes"] if node["kind"] == "tool")
+        self.assertEqual("active_plan", node["source"]["association"]["relation"])
+        self.assertTrue(any(edge["relation"] == "active_plan" for edge in graph["edges"]))
+
+    def test_ambiguous_active_plans_are_not_guessed(self):
+        active = [{"id": "a", "content": "A", "status": "in_progress"}, {"id": "b", "content": "B", "status": "in_progress"}]
+        ctx = {"version": 1, "actor": "master", "turn_id": "r", "active_task": active[0], "active_tasks": active}
+        graph, _ = self.execution(session([tool("one", data={"execution_context": ctx})], extra={"todos": active}))
+        node = next(node for node in graph["nodes"] if node["kind"] == "tool")
+        self.assertEqual("unrecorded", node["source"]["taskAssociation"])
+
+    def test_worker_tools_do_not_borrow_the_master_active_plan(self):
+        active = {"id": "a", "content": "A", "status": "in_progress"}
+        ctx = {"version": 1, "actor": "worker-a", "active_task": active, "active_tasks": [active]}
+        graph, _ = self.execution(session([tool("one", actor="worker-a", data={"execution_context": ctx})], extra={"todos": [active]}))
+        node = next(node for node in graph["nodes"] if node["kind"] == "tool")
+        self.assertEqual("unrecorded", node["source"]["taskAssociation"])
+        self.assertEqual("unrecorded", node["source"]["workerAssociation"])
+        self.assertFalse(any(node["kind"] == "worker_task" for node in graph["nodes"]))
+
+    def test_unused_frontier_hypotheses_stay_out_of_execution(self):
+        raw = session([tool("one")], extra={"frontier": {"intents": [{"id": "it-1", "hypothesis": "Unexecuted hypothesis", "status": "open"}]}})
+        graphs, _ = project(raw)
+        self.assertFalse(any(node["kind"] == "task" for node in graphs["execution"]["nodes"]))
+        self.assertTrue(any(node["kind"] == "hypothesis" for node in graphs["causal"]["nodes"]))
+
+    def test_explicit_frontier_binding_creates_a_real_task(self):
+        ctx = {"version": 1, "actor": "master", "task_id": "it-1"}
+        graph, _ = self.execution(session([tool("one", data={"execution_context": ctx})],
+                                         extra={"frontier": {"intents": [{"id": "it-1", "hypothesis": "Bound intent", "status": "claimed"}]}}))
+        task = next(node for node in graph["nodes"] if node["kind"] == "task")
+        self.assertEqual("Bound intent", task["label"])
+        self.assertEqual("claimed", task["status"])
+
+    def test_members_roles_and_swarm_config_never_create_worker_branches(self):
+        raw = session([tool("one")], extra={"swarm": {"enabled": True, "max_concurrent": 8},
+                                           "team": {"members": [{"agent_id": "executor", "role": "executor", "task": "Saved member"}],
+                                                    "residents": {"planner": {"task": "Saved role"}}}})
+        graph, _ = self.execution(raw)
+        self.assertEqual({"root", "tool"}, {node["kind"] for node in graph["nodes"]})
+
+    def test_real_dispatch_worker_branch_owns_worker_tools(self):
+        parent = {"version": 1, "actor": "worker-a", "dispatch_id": "d-1", "parent_invocation_id": "inv-parent"}
+        records = [tool("dispatch", name="task", data={"invocation_id": "inv-parent"}),
+                   {"id": "worker", "kind": "worker", "actor": "worker-a", "status": "running",
+                    "data": {"agent_id": "worker-a", "task": "Actual worker task", "execution_context": parent}},
+                   tool("child", actor="worker-a", data={"execution_context": {**parent, "turn_id": "wr-1"}})]
+        graph, _ = self.execution(session(records))
+        worker = next(node for node in graph["nodes"] if node["kind"] == "worker_task")
+        child = next(node for node in graph["nodes"] if node["kind"] == "tool" and node["source"]["actor"] == "worker-a")
+        self.assertTrue(any(edge["target"] == worker["id"] and edge["relation"] == "dispatch" for edge in graph["edges"]))
+        self.assertTrue(any(edge["source"] == worker["id"] and edge["target"] == child["id"] for edge in graph["edges"]))
+
+    def test_unresolved_explicit_dispatch_does_not_fall_back_to_older_actor_or_task(self):
+        old_context = {"version": 1, "actor": "worker-a", "dispatch_id": "old"}
+        records = [
+            {"id": "old-worker", "kind": "worker", "actor": "worker-a", "data": {"agent_id": "worker-a", "execution_context": old_context}},
+            tool("old-tool", actor="worker-a", data={"invocation_id": "old-invocation", "execution_context": old_context}),
+            tool("new-tool", actor="worker-a", data={"execution_context": {
+                "version": 1, "actor": "worker-a", "dispatch_id": "missing-new", "task_id": "old-plan",
+                "parent_invocation_id": "old-invocation",
+            }}),
+        ]
+        graph, actions = self.execution(session(records, extra={"todos": [{"id": "old-plan", "content": "Old plan"}]}))
+        root = next(node for node in graph["nodes"] if node["kind"] == "root")
+        new_tool = next(node for node in graph["nodes"] if node["actionId"] == actions[2]["id"])
+        self.assertEqual({root["id"]}, {edge["source"] for edge in graph["edges"] if edge["target"] == new_tool["id"]})
+        self.assertEqual("unassigned", new_tool["source"]["taskAssociation"])
+        self.assertEqual("unresolved_dispatch", new_tool["source"]["workerAssociation"])
+        self.assertEqual("missing-new", new_tool["source"]["unresolvedRelations"][0]["value"])
+
+    def test_rejected_dispatch_does_not_invent_a_worker(self):
+        graph, _ = self.execution(session([tool("dispatch", name="task", output={"agent_id": "worker-a", "status": "cancelled", "error": "not started"})]))
+        self.assertFalse(any(node["kind"] == "worker_task" for node in graph["nodes"]))
+
+    def test_statuses_do_not_propagate_to_main_task_or_other_nodes(self):
+        records = [{**message("u", "user", "Request"), "status": "done"}, {**tool("one"), "status": "error"}]
+        graph, _ = self.execution(session(records, extra={"todos": [{"id": "a", "content": "A", "status": "completed"}]}))
+        self.assertIsNone(next(node for node in graph["nodes"] if node["kind"] == "root")["status"])
+        self.assertEqual("error", next(node for node in graph["nodes"] if node["kind"] == "tool")["status"])
+        self.assertEqual("completed", next(node for node in graph["nodes"] if node["kind"] == "task")["status"])
+
+    def test_legacy_same_message_tools_are_parallel_without_message_nodes(self):
+        raw = session(messages=[{"role": "user", "content": "Request"},
+                                {"role": "assistant", "content": "", "tool_calls": [
+                                    {"id": "a", "function": {"name": "first", "arguments": "{}"}},
+                                    {"id": "b", "function": {"name": "second", "arguments": "{}"}}]},
+                                {"role": "tool", "tool_call_id": "a", "content": "A"},
+                                {"role": "tool", "tool_call_id": "b", "content": "B"}])
+        graph, actions = self.execution(raw)
+        self.assertEqual(3, len(actions))
+        self.assertEqual({"root", "tool"}, {node["kind"] for node in graph["nodes"]})
+        self.assertEqual(1, len({edge["source"] for edge in graph["edges"]}))
+        self.assertTrue(all(node["source"]["executionRound"]["matching"] == "tool_call_id" for node in graph["nodes"] if node["kind"] == "tool"))
+
+    def test_successful_todo_update_applies_only_to_following_completed_round(self):
+        update = tool("update", call_id="u", name="todo_write", output={"ok": True})
+        update["input"] = {"todos": [{"id": "a", "content": "A", "status": "in_progress"}]}
+        raw = session([update, tool("sibling", call_id="s", output="S"), tool("later", call_id="l", output="L")],
+                      extra={"todos": [{"id": "a", "content": "A", "status": "completed"}]}, messages=[
+                          {"role": "assistant", "content": "", "tool_calls": [
+                              {"id": "u", "function": {"name": "todo_write", "arguments": json.dumps(update["input"])}},
+                              {"id": "s", "function": {"name": "http_fetch", "arguments": "{}"}}]},
+                          {"role": "tool", "tool_call_id": "u", "content": '{"ok":true}'},
+                          {"role": "tool", "tool_call_id": "s", "content": "S"},
+                          {"role": "assistant", "content": "", "tool_calls": [{"id": "l", "function": {"name": "http_fetch", "arguments": "{}"}}]},
+                          {"role": "tool", "tool_call_id": "l", "content": "L"},
+                      ])
+        graph, actions = self.execution(raw)
+        nodes = {node["actionId"]: node for node in graph["nodes"] if node["kind"] == "tool"}
+        self.assertEqual("unrecorded", nodes[actions[1]["id"]]["source"]["taskAssociation"])
+        self.assertEqual("active_plan", nodes[actions[2]["id"]]["source"]["association"]["relation"])
+        self.assertEqual("completed_previous_todo_write", nodes[actions[2]["id"]]["source"]["association"]["field"])
+
+    def test_saved_active_plan_does_not_imply_historical_tool_membership(self):
+        graph, _ = self.execution(session([tool("one")], extra={"todos": [{"id": "a", "content": "http_fetch target", "status": "in_progress"}]}))
+        node = next(node for node in graph["nodes"] if node["kind"] == "tool")
+        self.assertEqual("unrecorded", node["source"]["taskAssociation"])
+
+    def test_all_long_tool_records_survive_and_original_logs_are_unchanged(self):
+        raw = session([message("u", "user", "Request"), *[tool(f"t-{index}") for index in range(1200)], message("end", "assistant", "Finished")])
+        before = deepcopy(raw)
+        graph, actions = self.execution(raw)
+        self.assertEqual(1202, len(actions))
+        self.assertEqual(1200, sum(node["kind"] == "tool" for node in graph["nodes"]))
+        self.assertEqual(before, raw)
+        self.assertFalse(any(node["kind"] in {"turn", "context", "group", "request", "session"} for node in graph["nodes"]))
 
     def test_no_records_produces_two_empty_graphs(self):
         result = build_semantic_graphs({}, [])
         self.assertEqual({"execution": {"nodes": [], "edges": []}, "causal": {"nodes": [], "edges": []}}, result)
-
-    def test_nonempty_execution_has_one_real_session_root(self):
-        raw = session([tool("one", actor="worker-a"), tool("two", actor="worker-b")])
-        raw["name"] = "Recorded session name"
-        graph = project(raw)[0]["execution"]
-        child_ids = {edge["target"] for edge in graph["edges"]}
-        roots = [node for node in graph["nodes"] if node["id"] not in child_ids]
-        self.assertEqual(1, len(roots))
-        self.assertEqual("session", roots[0]["kind"])
-        self.assertEqual("Recorded session name", roots[0]["label"])
-        self.assertIsNone(roots[0]["status"])
-        self.assertEqual(2, len([edge for edge in graph["edges"] if edge["source"] == roots[0]["id"]]))
-
-    def test_message_done_is_not_a_completed_task_in_request_or_turn(self):
-        raw = session([{**message("u", "user", "Request"), "status": "done"},
-                       {**message("a", "assistant", "Reply"), "status": "done"}])
-        graph = project(raw)[0]["execution"]
-        for node in graph["nodes"]:
-            if node["kind"] in {"request", "turn"}:
-                self.assertIsNone(node["status"])
-                self.assertEqual("done", node["source"]["recordStatus"])
-
-    def test_user_and_assistant_records_form_branches_not_sequence_chain(self):
-        raw = session([message("u", "user", "Inspect this"), message("a", "assistant", "Plan"), tool("t1"), tool("t2")])
-        result, actions = project(raw)
-        graph = result["execution"]
-        by_action = {node["actionId"]: node for node in graph["nodes"] if node["actionId"]}
-        request, turn, first, second = [by_action[action["id"]] for action in actions]
-        self.assertEqual("request", request["kind"])
-        self.assertEqual("turn", turn["kind"])
-        edges = {(edge["source"], edge["target"]) for edge in graph["edges"]}
-        self.assertIn((request["id"], turn["id"]), edges)
-        self.assertIn((turn["id"], first["id"]), edges)
-        self.assertIn((turn["id"], second["id"]), edges)
-        self.assertNotIn((first["id"], second["id"]), edges)
-        self.assertTrue(all(edge["relation"] == "record_group" for edge in graph["edges"]))
-        self.assertEqual([], result["causal"]["nodes"])
-        self.assert_valid(graph)
-
-    def test_legacy_messages_tool_call_ids_make_real_turn_branches(self):
-        raw = session(messages=[
-            {"role": "user", "content": "Inspect two resources"},
-            {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "c1", "function": {"name": "http_fetch", "arguments": "{}"}},
-                {"id": "c2", "function": {"name": "http_fetch", "arguments": "{}"}},
-            ]},
-            {"role": "tool", "tool_call_id": "c1", "content": "First"},
-            {"role": "tool", "tool_call_id": "c2", "content": "Second"},
-        ])
-        result, actions = project(raw)
-        graph = result["execution"]
-        turns = [node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls"]
-        self.assertEqual(1, len(turns))
-        children = [edge for edge in graph["edges"] if edge["source"] == turns[0]["id"]]
-        self.assertEqual(2, len(children))
-        self.assertEqual({"c1", "c2"}, {edge["sourceInfo"]["value"] for edge in children})
-        self.assertEqual(len(actions), len([node for node in graph["nodes"] if node["actionId"]]))
-
-    def test_modern_tool_calls_match_original_messages_by_id(self):
-        raw = session([tool("event-a", call_id="call-a"), tool("event-b", call_id="call-b")], messages=[
-            {"role": "user", "content": "Recorded request"},
-            {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "call-a", "function": {"name": "http_fetch"}},
-                {"id": "call-b", "function": {"name": "http_fetch"}},
-            ]},
-        ])
-        graph = project(raw)[0]["execution"]
-        turn = next(node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls")
-        self.assertEqual(2, len([edge for edge in graph["edges"] if edge["source"] == turn["id"]]))
-
-    def test_empty_assistant_calls_are_named_and_located_by_matched_actions(self):
-        raw = session([message("user", "user", "Request"), tool("one", call_id="c1"), tool("two", call_id="c2")], messages=[
-            {"role": "user", "content": "Request"},
-            {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "c1", "function": {"name": "http_fetch", "arguments": "{}"}},
-                {"id": "c2", "function": {"name": "http_fetch", "arguments": "{}"}},
-            ]},
-        ])
-        graph = project(raw)[0]["execution"]
-        group = next(node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls")
-        self.assertEqual("tool_group", group["kind"])
-        self.assertEqual("工具调用组 · 2项", group["label"])
-        self.assertEqual(1, group["step"])
-        self.assertIsNone(group["actionId"])
-        self.assertEqual("matched_tool_calls", group["source"]["stepSource"]["kind"])
-        self.assertNotIn("replayVisibility", group["source"])
-        self.assertFalse(any("助手回合" in node["label"] for node in graph["nodes"]))
-
-    def test_unmatched_tool_call_group_is_snapshot_only(self):
-        raw = session([], messages=[{"role": "assistant", "content": "", "tool_calls": [
-            {"id": "unmatched", "function": {"name": "http_fetch", "arguments": "{}"}}
-        ]}])
-        graph = project(raw)[0]["execution"]
-        group = next(node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls")
-        self.assertIsNone(group["step"])
-        self.assertEqual("snapshot_only", group["source"]["replayVisibility"])
-
-    def test_null_and_whitespace_toolcall_content_are_groups_with_original_sources(self):
-        for content in (None, "", " \n\t"):
-            with self.subTest(content=content):
-                saved_message = {"role": "assistant", "content": content, "tool_calls": [
-                    {"id": "c1", "function": {"name": "http_fetch", "arguments": "{}"}}
-                ]}
-                raw = session([tool("one", call_id="c1")], messages=[saved_message])
-                group = next(node for node in project(raw)[0]["execution"]["nodes"] if node["kind"] == "tool_group")
-                self.assertEqual(saved_message, group["source"]["record"])
-                self.assertEqual("工具调用组 · 1项", group["label"])
-
-    def test_empty_auxiliary_messages_without_calls_do_not_create_nodes(self):
-        for content in (None, "", " \n\t"):
-            with self.subTest(content=content):
-                raw = session([], messages=[{"role": "assistant", "content": content}])
-                self.assertEqual([], project(raw)[0]["execution"]["nodes"])
-
-    def test_unmatched_auxiliary_message_keeps_source_and_is_snapshot_only(self):
-        saved_message = {"role": "assistant", "content": "Unmatched saved message"}
-        raw = session([], messages=[saved_message])
-        node = next(node for node in project(raw)[0]["execution"]["nodes"] if node["kind"] == "turn")
-        self.assertEqual(saved_message, node["source"]["record"])
-        self.assertIsNone(node["step"])
-        self.assertEqual("snapshot_only", node["source"]["replayVisibility"])
-
-    def test_matched_empty_assistant_action_keeps_tool_group_classification(self):
-        raw = session([message("empty", "assistant", ""), tool("one", call_id="c1")], messages=[
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "http_fetch", "arguments": "{}"}}]}
-        ])
-        graph = project(raw)[0]["execution"]
-        group = next(node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls")
-        self.assertEqual("tool_group", group["kind"])
-        self.assertIsNotNone(group["actionId"])
-        self.assertEqual(0, group["step"])
-
-    def test_host_context_is_not_a_user_request_or_new_conversation_parent(self):
-        context = "【宿主运行状态 — 完整快照，后出现的快照替代先前快照】\nSynthetic context"
-        raw = session([message("user", "user", "Request"), tool("one", call_id="c1")], messages=[
-            {"role": "user", "content": "Request"}, {"role": "user", "content": context},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "http_fetch", "arguments": "{}"}}]},
-        ])
-        graph = project(raw)[0]["execution"]
-        self.assertEqual(1, sum(node["kind"] == "request" for node in graph["nodes"]))
-        host = next(node for node in graph["nodes"] if node["kind"] == "context")
-        request = next(node for node in graph["nodes"] if node["kind"] == "request")
-        group = next(node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls")
-        self.assertEqual(context, host["source"]["record"]["content"])
-        self.assertEqual("宿主状态快照", host["label"])
-        self.assertEqual("snapshot_only", host["source"]["replayVisibility"])
-        self.assertTrue(any(edge["source"] == request["id"] and edge["target"] == group["id"] for edge in graph["edges"]))
-        self.assertFalse(any(edge["source"] == host["id"] for edge in graph["edges"]))
-
-    def test_legacy_host_context_keeps_its_real_action_position(self):
-        context = "【宿主运行状态 — 完整快照，后出现的快照替代先前快照】\nSynthetic context"
-        raw = session(messages=[{"role": "user", "content": "Request"}, {"role": "user", "content": context},
-                                {"role": "assistant", "content": "Reply"}])
-        graph = project(raw)[0]["execution"]
-        host = next(node for node in graph["nodes"] if node["kind"] == "context")
-        self.assertEqual(1, host["step"])
-        self.assertIsNotNone(host["actionId"])
-        self.assertIsNone(host["status"])
-        self.assertEqual(1, sum(node["kind"] == "request" for node in graph["nodes"]))
-
-    def test_different_id_namespaces_use_only_unique_exact_payload_match(self):
-        raw = session([tool("trace-one", call_id="internal-id", output="Actual result")], messages=[
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "provider-id", "function": {"name": "http_fetch", "arguments": "{}"}}]},
-            {"role": "tool", "tool_call_id": "provider-id", "content": "Actual result"},
-        ])
-        graph = project(raw)[0]["execution"]
-        matched = [edge for edge in graph["edges"] if edge["sourceInfo"].get("matching")]
-        self.assertEqual(1, len(matched))
-        self.assertEqual("tool_input_output_exact", matched[0]["sourceInfo"]["matching"])
-        self.assertEqual("record_group", matched[0]["relation"])
-
-    def test_ambiguous_payloads_are_not_assigned_to_a_message_call(self):
-        raw = session([tool("one", output="same"), tool("two", output="same")], messages=[
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "provider-id", "function": {"name": "http_fetch", "arguments": "{}"}}]},
-            {"role": "tool", "tool_call_id": "provider-id", "content": "same"},
-        ])
-        graph = project(raw)[0]["execution"]
-        self.assertFalse(any(edge["sourceInfo"].get("matching") for edge in graph["edges"]))
-        self.assertEqual(2, len([node for node in graph["nodes"] if node["actionId"]]))
-
-    def test_explicit_task_parent_and_action_membership_override_groups(self):
-        raw = session([tool("event", data={"task_id": "child"})], extra={"todos": [
-            {"id": "root", "content": "Actual root", "status": "in_progress"},
-            {"id": "child", "parent_id": "root", "content": "Actual child", "status": "pending"},
-        ]})
-        graph = project(raw)[0]["execution"]
-        by_label = {node["label"]: node for node in graph["nodes"]}
-        action = next(node for node in graph["nodes"] if node["actionId"])
-        edges = {(edge["source"], edge["target"]): edge for edge in graph["edges"]}
-        self.assertEqual("task_parent", edges[(by_label["Actual root"]["id"], by_label["Actual child"]["id"])]["relation"])
-        self.assertEqual("task_id", edges[(by_label["Actual child"]["id"], action["id"])]["sourceInfo"]["field"])
-
-    def test_explicit_plan_dependencies_keep_multiple_predecessors(self):
-        raw = session([], extra={"todos": [
-            {"id": "a", "content": "First prerequisite"},
-            {"id": "b", "content": "Second prerequisite"},
-            {"id": "c", "content": "Dependent task", "depends_on": ["a", "b"]},
-        ]})
-        graph = project(raw)[0]["execution"]
-        dependencies = [edge for edge in graph["edges"] if edge["relation"] == "dependency"]
-        self.assertEqual(2, len(dependencies))
-        self.assertEqual(1, len({edge["target"] for edge in dependencies}))
-        self.assertEqual({"a", "b"}, {edge["sourceInfo"]["value"] for edge in dependencies})
-        self.assertTrue(all(edge["sourceInfo"]["field"] == "depends_on" for edge in dependencies))
-        incoming = {edge["target"] for edge in graph["edges"]}
-        self.assertEqual(1, sum(node["id"] not in incoming for node in graph["nodes"]))
-
-    def test_dependency_cycle_is_reported_without_invented_edge(self):
-        raw = session([], extra={"todos": [
-            {"id": "a", "content": "A", "dependencies": ["b"]},
-            {"id": "b", "content": "B", "dependencies": ["a"]},
-        ]})
-        graph = project(raw)[0]["execution"]
-        self.assertEqual(1, sum(edge["relation"] == "dependency" for edge in graph["edges"]))
-        self.assertTrue(any(relation.get("reason") == "cyclic_dependency" for node in graph["nodes"] for relation in node["source"].get("unresolvedRelations", [])))
-
-    def test_missing_or_non_task_dependency_does_not_create_execution_relation(self):
-        raw = session([tool("source-record")], extra={"todos": [
-            {"id": "a", "content": "A", "depends_on": ["source-record", "missing"]},
-        ]})
-        graph = project(raw)[0]["execution"]
-        self.assertFalse(any(edge["relation"] == "dependency" for edge in graph["edges"]))
-
-    def test_dispatch_output_and_worker_identity_make_a_subtask_branch(self):
-        raw = session([
-            message("u", "user", "Work"), message("a", "assistant", "Delegate"),
-            tool("dispatch", name="task", output={"agent_id": "worker-a", "status": "error"}),
-            message("worker-message", "assistant", "Worker text", actor="worker-a"),
-            tool("worker-tool", actor="worker-a"),
-        ], extra={"team": {"members": [{"agent_id": "worker-a", "task": "Actual child task", "status": "error"}]}})
-        result, actions = project(raw)
-        graph = result["execution"]
-        worker = next(node for node in graph["nodes"] if node["kind"] == "worker_task")
-        dispatch = next(node for node in graph["nodes"] if node["actionId"] == actions[2]["id"])
-        self.assertTrue(any(edge["source"] == dispatch["id"] and edge["target"] == worker["id"] and edge["relation"] == "dispatch" for edge in graph["edges"]))
-        self.assertEqual(2, len([edge for edge in graph["edges"] if edge["source"] == worker["id"]]))
-        self.assertEqual("error", worker["status"])
-
-    def test_all_long_unassigned_records_survive_with_no_success_claim(self):
-        raw = session([tool(f"event-{index}") for index in range(1200)])
-        result, actions = project(raw)
-        graph = result["execution"]
-        leaves = [node for node in graph["nodes"] if node["actionId"]]
-        self.assertEqual(1200, len(leaves))
-        self.assertEqual({action["id"] for action in actions}, {node["actionId"] for node in leaves})
-        self.assertTrue(all(node["status"] is None for node in graph["nodes"]))
-        self.assertTrue(any("未关联任务" in node["label"] for node in graph["nodes"]))
-        self.assertFalse(any(edge["relation"] == "sequence" for edge in graph["edges"]))
-
-    def test_missing_parent_is_explained_without_creating_task(self):
-        raw = session([tool("event", data={"task_id": "missing-task"})])
-        graph = project(raw)[0]["execution"]
-        action = next(node for node in graph["nodes"] if node["actionId"])
-        self.assertEqual("missing-task", action["source"]["unresolvedRelations"][0]["value"])
-        self.assertFalse(any(node["kind"] == "task" for node in graph["nodes"]))
-
-    def test_cyclic_task_references_do_not_create_execution_cycle(self):
-        raw = session([], extra={"todos": [{"id": "a", "content": "A", "parent_id": "b"}, {"id": "b", "content": "B", "parent_id": "a"}]})
-        graph = project(raw)[0]["execution"]
-        parents = {edge["target"]: edge["source"] for edge in graph["edges"]}
-        for node in graph["nodes"]:
-            seen = set()
-            cursor = node["id"]
-            while cursor in parents:
-                self.assertNotIn(cursor, seen)
-                seen.add(cursor)
-                cursor = parents[cursor]
-        self.assertTrue(any(node["source"].get("unresolvedRelations") for node in graph["nodes"]))
 
     def test_text_that_mentions_exploit_or_proof_never_creates_causality(self):
         raw = session([message("a", "assistant", "confirmed exploited evidence SQL injection")])
@@ -349,16 +316,6 @@ class SemanticGraphTests(unittest.TestCase):
         evidence = next(node for node in graph["nodes"] if node["kind"] == "evidence_reference")
         self.assertTrue(evidence["source"]["unresolved"])
         self.assertIsNone(evidence["status"])
-
-    def test_frontier_dependency_is_causal_reference_not_task_parent(self):
-        raw = session([], extra={"frontier": {"intents": [{"id": "it-1", "hypothesis": "Actual hypothesis", "status": "open", "depends_on": ["host::observed-fact"]}]}})
-        result = project(raw)[0]
-        self.assertFalse(any(edge["relation"] == "task_parent" for edge in result["execution"]["edges"]))
-        causal = result["causal"]
-        self.assertEqual(2, len(causal["nodes"]))
-        self.assertEqual("depends_on", causal["edges"][0]["relation"])
-        self.assertEqual("host::observed-fact", causal["edges"][0]["sourceInfo"]["value"])
-        self.assertTrue(any(node["source"].get("unresolved") for node in causal["nodes"]))
 
     def test_saved_blackboard_fact_resolves_explicit_dependency(self):
         raw = session([], extra={"frontier": {"intents": [{"id": "it-1", "hypothesis": "Hypothesis", "depends_on": ["bb-1"]}]}},
@@ -427,18 +384,3 @@ class SemanticGraphTests(unittest.TestCase):
         node = next(node for node in graph["nodes"] if node["kind"] == "evidence")
         self.assertEqual(evidence, node["source"]["record"])
         self.assertFalse(node["source"]["unresolved"])
-
-    def test_projection_does_not_mutate_records_or_truncate_source(self):
-        raw = session([message("u", "user", "x" * 10000), tool("event")])
-        actions = session_to_graph(raw)["actions"]
-        before_raw, before_actions = deepcopy(raw), deepcopy(actions)
-        result = build_semantic_graphs(raw, actions)
-        self.assertEqual(before_raw, raw)
-        self.assertEqual(before_actions, actions)
-        user = next(node for node in result["execution"]["nodes"] if node["kind"] == "request")
-        self.assertEqual(10000, len(user["source"]["record"]["text"]))
-        json.dumps(result, allow_nan=False)
-
-
-if __name__ == "__main__":
-    unittest.main()
