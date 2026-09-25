@@ -33,6 +33,7 @@ export default function App() {
   const [isLoop, setIsLoop] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState('');
 
   const timerRef = useRef(null);
 
@@ -196,13 +197,22 @@ export default function App() {
   }, [totalSteps]);
 
   // Fullscreen toggle
-  const handleToggleFullscreen = useCallback(() => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
+  useEffect(() => {
+    const updateFullscreen = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+  }, []);
+
+  const handleToggleFullscreen = useCallback(async () => {
+    setFullscreenError('');
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch {
+      setFullscreenError('全屏切换失败，请重试。');
     }
   }, []);
 
@@ -213,6 +223,7 @@ export default function App() {
 
   return (
     <div className={`drx-replay-app ${isFullscreen ? 'fullscreen' : ''}`}>
+      {fullscreenError && <div role="alert">{fullscreenError}</div>}
       {/* ---------------- Top Replay Dashboard Banner ---------------- */}
       <TopReplayBanner
         sessionName={summary.name || selectedSessionId || 'test'}
