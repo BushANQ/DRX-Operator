@@ -24,6 +24,7 @@ export default function NodeInspector({ action, sessionId, onClose }: InspectorP
       return next.x === old.x && next.y === old.y ? old : next;
     }));
     observer.observe(parent);
+    if (element.current) observer.observe(element.current);
     return () => observer.disconnect();
   }, [clamp]);
   useEffect(() => {
