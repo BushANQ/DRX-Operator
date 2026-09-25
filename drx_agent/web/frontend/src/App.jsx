@@ -48,10 +48,10 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const [measurements, setMeasurements] = useState({});
   const [flow, setFlow] = useState(null);
   const [canvasWidth, setCanvasWidth] = useState(900);
+  const [canvasHeight, setCanvasHeight] = useState(600);
   const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
   const [fullscreenError, setFullscreenError] = useState('');
   const canvasRef = useRef(null);
-  const previousWidth = useRef(0);
   const loading = listStatus === 'loading' || session.status === 'loading';
   const error = listError || session.error;
   const disabled = loading || Boolean(error) || !actions.length;
@@ -62,7 +62,10 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   useEffect(() => {
     const element = canvasRef.current;
     if (!element) return undefined;
-    const observer = new ResizeObserver(([entry]) => setCanvasWidth(entry.contentRect.width));
+    const observer = new ResizeObserver(([entry]) => {
+      setCanvasWidth(entry.contentRect.width);
+      setCanvasHeight(entry.contentRect.height);
+    });
     observer.observe(element);
     return () => observer.disconnect();
   }, [loading, error, hasActions]);
@@ -74,10 +77,8 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   }, [flow, focusNode]);
 
   useEffect(() => {
-    const resized = previousWidth.current !== canvasWidth;
-    previousWidth.current = canvasWidth;
-    if (follow || resized) locateCurrent();
-  }, [follow, canvasWidth, locateCurrent]);
+    if (follow) locateCurrent();
+  }, [follow, canvasWidth, canvasHeight, locateCurrent]);
 
   // Replay advances one saved record per beat; displayed timestamps remain the original times.
   useEffect(() => {
