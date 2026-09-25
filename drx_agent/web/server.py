@@ -594,21 +594,9 @@ def _session_to_graph(raw: dict) -> dict:
                     "thought": "",
                 })
 
-    # Deduplicate consecutive identical titles
-    condensed = []
-    prev_title = ""
-    for act in raw_actions:
-        if act["title"] == prev_title:
-            continue
-        condensed.append(act)
-        prev_title = act["title"]
-
-    # Sample cleanly to 38 actions matching target UI
-    target_count = 38
-    if len(condensed) > target_count:
-        indices = [int(i * (len(condensed) - 1) / (target_count - 1)) for i in range(target_count)]
-        condensed = [condensed[i] for i in indices]
-    elif len(condensed) == 0:
+    # Keep every recorded operation, including repeated calls with distinct inputs.
+    condensed = raw_actions
+    if not condensed:
         condensed = [
             {"category": "调度", "title": "任务启动 · AI 漏洞研判", "actor": "master", "tool": "", "input": target_url, "output": "ok", "thought": "初始化研判任务"},
             {"category": "探测", "title": f"访问站点入口 {target_url}", "actor": "master", "tool": "http_fetch", "input": target_url, "output": "HTTP 200", "thought": "探测入口"},
