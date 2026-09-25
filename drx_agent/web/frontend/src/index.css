@@ -318,3 +318,8 @@ button { transition: color 140ms, background 140ms, border-color 140ms; }
 .node-open:hover { color: #e5efff; }
 .rf-event-card .react-flow__handle { background: #7586a1; border-color: #acbfd9; width: 4px; height: 4px; opacity: .65; }
 @media (prefers-reduced-motion: reduce) { .react-flow__edge.animated path { animation: none !important; } }
+.code-key { color: #91b8e7; }
+.code-string { color: #a4cc9b; }
+.code-number { color: #dcb681; }
+.code-literal { color: #bca4e5; }
+.session-sidebar-selection-dot { background: none; color: #6e9bfa; }

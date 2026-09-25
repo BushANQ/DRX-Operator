@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Copy, TerminalWindow } from '@phosphor-icons/react';
+import CodeBlock from './CodeBlock.tsx';
+import { eventPresentation } from './presentation.ts';
 import type { ReplayAction } from './types.ts';
 
 interface RecordDetailsProps {
@@ -67,7 +69,7 @@ export default function RecordDetails({ action, sessionId }: RecordDetailsProps)
             </button>
           )}
         </div>
-        <pre className={`detail-code-pre${output ? ' output-pre' : ''}`}><code>{display(value)}</code></pre>
+        <CodeBlock value={display(value)} output={output} />
       </section>
     );
   }
@@ -78,7 +80,7 @@ export default function RecordDetails({ action, sessionId }: RecordDetailsProps)
         <>
           <div className="detail-meta-card">
             <div className="detail-meta-top">
-              <span className="detail-category-pill" style={{ color: action.categoryColor || '#94a3b8' }}>{display(action.category || action.kind)}</span>
+              <span className="detail-category-pill" style={{ color: eventPresentation(action).color }}>{display(action.category || action.kind)}</span>
               <span className="detail-time-stamp">时间：{display(action.timeOffset)}</span>
             </div>
             <h2 className="detail-title-large">{display(action.title)}</h2>

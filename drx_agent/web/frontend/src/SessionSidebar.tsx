@@ -2,6 +2,7 @@ import { useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowClockwise,
   CalendarBlank,
+  Circle,
   CaretLeft,
   ClockCounterClockwise,
   FolderOpen,
@@ -168,7 +169,7 @@ export default function SessionSidebar({
                   >
                     <span className="session-sidebar-item-topline">
                       <span className="session-sidebar-item-id" title={session.id}>{shortId(session.id)}</span>
-                      {selected && <span className="session-sidebar-selection-dot" aria-hidden="true" />}
+                      {selected && <Circle size={6} weight="fill" className="session-sidebar-selection-dot" aria-hidden="true" />}
                     </span>
                     <span className="session-sidebar-item-name" title={name}>{name}</span>
                     <span className="session-sidebar-item-date">
