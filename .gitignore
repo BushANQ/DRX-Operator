@@ -51,3 +51,6 @@ node_modules/
 # Vendored reference source (local only, not published)
 QWEN-EXO-booster/
 QWEN-EXO-booster*.zip
+
+# Local review documents
+/design-qa.md
