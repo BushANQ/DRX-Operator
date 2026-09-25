@@ -3,7 +3,7 @@ import { ReactFlow, Background, MiniMap } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import SemanticEdge from './SemanticEdge.tsx';
 import SemanticNodeCard, { SemanticKindChip } from './SemanticNodeCard.tsx';
-import { projectSemanticGraph, expandAncestorsForAction, SEMANTIC_NODE_WIDTH, SEMANTIC_NODE_HEIGHT } from './semanticLayout.ts';
+import { projectSemanticGraph, expandAncestorsForAction, relatedPath, SEMANTIC_NODE_WIDTH, SEMANTIC_NODE_HEIGHT } from './semanticLayout.ts';
 import type { SemanticNode, SemanticGraph, SemanticFlowNode, SemanticFlowEdge, SemanticPositions, SemanticMeasurements } from './semanticTypes.ts';
 import TopReplayBanner from './TopReplayBanner';
 import ActionStream from './ActionStream';
@@ -75,6 +75,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const [graphView, setGraphView] = useState<'execution' | 'causal'>('execution');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const semanticGraph = graph.graphs?.[graphView] ?? EMPTY_SEMANTIC;
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth >= 850);
   const [follow, setFollow] = useState(true);
@@ -131,23 +132,32 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     const viewport = flow?.getViewport();
     if (node && viewport) collapseAnchor.current = { id, x: node.position.x * viewport.zoom + viewport.x, y: node.position.y * viewport.zoom + viewport.y, zoom: viewport.zoom };
     setFollow(false);
+    setHoveredNodeId(null);
     setCollapsed((old) => { const next = new Set(old); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   }, [flow]);
+  const layoutProjection = useMemo(() => projectSemanticGraph(semanticGraph, currentStep, collapsed, positions, measurements, isSnapshot ? 'snapshot' : 'replay'),
+    [semanticGraph, currentStep, collapsed, positions, measurements, isSnapshot]);
   const projected = useMemo(() => {
-    const projection = projectSemanticGraph(semanticGraph, currentStep, collapsed, positions, measurements, isSnapshot ? 'snapshot' : 'replay');
+    const projection = layoutProjection;
+    const focus = hoveredNodeId ? relatedPath(semanticGraph, hoveredNodeId) : null;
     return { ...projection, nodes: projection.nodes.map((node) => ({
       ...node, focusable: false,
+      style: { ...node.style, opacity: focus && !focus.has(node.id) ? 0.25 : 1 },
       data: { ...node.data, onOpen: () => openEntity(node.data), onToggle: () => toggleBranch(node.id) },
-    })) };
-  }, [semanticGraph, currentStep, collapsed, positions, measurements, isSnapshot, openEntity, toggleBranch]);
-  const focusNode = projected.nodes.find((node) => projected.currentNodeIds.includes(node.id));
+    })), edges: projection.edges.map((edge) => {
+      if (!focus) return edge;
+      const related = focus.has(edge.source) && focus.has(edge.target);
+      return { ...edge, style: { ...edge.style, opacity: related ? 1 : 0.15, stroke: related ? '#829fff' : edge.style?.stroke, strokeWidth: related ? 2.4 : edge.style?.strokeWidth } };
+    }) };
+  }, [layoutProjection, semanticGraph, hoveredNodeId, openEntity, toggleBranch]);
+  const focusNode = layoutProjection.nodes.find((node) => layoutProjection.currentNodeIds.includes(node.id));
   useLayoutEffect(() => {
     const anchor = collapseAnchor.current;
     if (!anchor || !flow) return;
-    const node = projected.nodes.find((item) => item.id === anchor.id);
+    const node = layoutProjection.nodes.find((item) => item.id === anchor.id);
     collapseAnchor.current = null;
     if (node) void flow.setViewport({ x: anchor.x - node.position.x * anchor.zoom, y: anchor.y - node.position.y * anchor.zoom, zoom: anchor.zoom }, { duration: 0 });
-  }, [flow, projected.nodes]);
+  }, [flow, layoutProjection.nodes]);
   const inspectorNode = selectedNodeId ? semanticGraph.nodes.find((node) => node.id === selectedNodeId) ?? null
     : semanticGraph.nodes.find((node) => node.actionId === currentAction?.id) ?? null;
   const inspectorAction = selectedNodeId ? actions.find((action) => action.id === inspectorNode?.actionId) ?? null : currentAction;
@@ -173,14 +183,14 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   }, [flow, focusNode, inspectorOpen, canvasWidth, canvasHeight]);
 
   useEffect(() => {
-    if (!flow || !projected.nodes.length) return;
+    if (!flow || !layoutProjection.nodes.length) return;
     const context = `${selectedSessionId}:${graphView}`;
     if (initialView.current !== context || (follow && step === null)) {
       initialView.current = context;
-      const viewport = overviewViewport(projected.nodes, canvasWidth, canvasHeight, false);
+      const viewport = overviewViewport(layoutProjection.nodes, canvasWidth, canvasHeight, false);
       if (viewport) {
         if (graphView === 'execution' && viewport.zoom < 0.55) {
-          const root = projected.nodes.find((node) => node.data.kind === 'session') ?? projected.nodes[0];
+          const root = layoutProjection.nodes.find((node) => node.data.kind === 'root') ?? layoutProjection.nodes.find((node) => node.data.kind === 'session') ?? layoutProjection.nodes[0];
           viewport.zoom = 0.55;
           viewport.x = canvasWidth / 2 - (root.position.x + (root.width ?? SEMANTIC_NODE_WIDTH) / 2) * viewport.zoom;
           viewport.y = 115 - root.position.y * viewport.zoom;
@@ -188,7 +198,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
         void flow.setViewport(viewport, { duration: 0 });
       }
     } else if (follow && step !== null) locateCurrent();
-  }, [flow, projected.nodes, selectedSessionId, graphView, follow, step, canvasWidth, canvasHeight, locateCurrent]);
+  }, [flow, layoutProjection.nodes, selectedSessionId, graphView, follow, step, canvasWidth, canvasHeight, locateCurrent]);
 
   // Replay advances one saved record per beat; displayed timestamps remain the original times.
   useEffect(() => {
@@ -273,6 +283,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const sessionName = summary.name ?? sessions.find((item) => item.id === selectedSessionId)?.name ?? selectedSessionId;
   const closeInspector = useCallback(() => setInspectorOpen(false), []);
   const changeView = (view: 'execution' | 'causal') => {
+    setHoveredNodeId(null);
     setGraphView(view);
     setSelectedNodeId(null);
     setInspectorOpen(false);
@@ -305,6 +316,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
               <ReactFlow<SemanticFlowNode, SemanticFlowEdge> nodes={projected.nodes} edges={projected.edges} nodeTypes={semanticNodeTypes} edgeTypes={semanticEdgeTypes}
                 onInit={setFlow} onNodesChange={onNodesChange} onMoveStart={(event) => { if (event) setFollow(false); }}
                 onNodeClick={(_event, node) => openEntity(node.data)}
+                onNodeMouseEnter={(_event, node) => setHoveredNodeId(node.id)} onNodeMouseLeave={() => setHoveredNodeId(null)}
                 nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null}
                 onlyRenderVisibleElements minZoom={0.001} maxZoom={2} proOptions={{ hideAttribution: true }}>
                 <Background color="#29384e" gap={24} size={1} />
@@ -312,7 +324,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
               </ReactFlow>
             )}
           </div>
-          <div className="canvas-context"><span>{graphView === 'execution' ? '执行图' : '因果图'}</span><span>{graphView === 'execution' ? '任务与记录归属' : '已保存的证据关系'}</span><span>{loading || error || graphMissing ? '未读取' : `${projected.nodes.length} / ${semanticGraph.nodes.length} 节点 · ${projected.edges.length} 条关系`}</span></div>
+          <div className="canvas-context"><span>{graphView === 'execution' ? '执行图' : '因果图'}</span><span>{graphView === 'execution' ? '任务与工具执行' : '已保存的证据关系'}</span><span>{loading || error || graphMissing ? '未读取' : `${projected.nodes.length} / ${semanticGraph.nodes.length} 节点 · ${projected.edges.length} 条关系`}</span></div>
           {!loading && !error && <div className={`canvas-playback-state ${isPlaying ? 'is-playing' : ''}`} aria-live="polite">{isPlaying ? <Play size={13} weight="fill" /> : <Pause size={13} />}<span>{playbackLabel}</span></div>}
           <div className="graph-tools" role="group" aria-label="图谱操作">
             <button className="icon-button" disabled={graphDisabled} aria-label="放大图谱" title="放大" onClick={() => { setFollow(false); void flow?.zoomIn({ duration: 160 }); }}><Plus size={17} /></button>
@@ -327,7 +339,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
           <button className="panel-handle panel-handle-right" aria-label={sidebarVisible ? '收起事件日志' : '展开事件日志'} aria-expanded={sidebarVisible} onClick={() => setSidebarVisible((value) => !value)}>{sidebarVisible ? <CaretRight size={14} /> : <CaretLeft size={14} />}</button>
           {!mapVisible && <div className="graph-legend" aria-label={graphView === 'causal' ? '节点类型图例' : '记录状态图例'}>
             {graphView === 'causal' ? <><span>节点类型</span>{['fact', 'evidence', 'hypothesis', 'finding', 'reference'].map((kind) => <span key={kind}><SemanticKindChip kind={kind} /></span>)}</>
-              : <><span>状态图例</span><span><Circle size={8} weight="fill" className="legend-complete" />已完成</span><span><Circle size={8} weight="fill" className="legend-running" />进行中</span><span><Circle size={8} weight="fill" className="legend-error" />失败 / 拒绝</span><span><Circle size={8} weight="fill" className="legend-unknown" />无状态记录</span></>}
+              : <><span>状态图例</span><span><Circle size={8} weight="fill" className="legend-complete" />已完成</span><span><Circle size={8} weight="fill" className="legend-running" />进行中</span><span><Circle size={8} weight="fill" className="legend-error" />失败 / 拒绝</span><span><Circle size={8} weight="fill" className="legend-unknown" />无状态记录</span><span>虚线：计划或记录顺序</span></>}
           </div>}
           {inspectorOpen && (inspectorNode || inspectorAction) && !loading && !error && <NodeInspector node={inspectorNode} relations={semanticGraph.edges.filter((edge) => edge.source === inspectorNode?.id || edge.target === inspectorNode?.id)} action={inspectorAction} sessionId={summary.sessionId} onClose={closeInspector} />}
           {graphView === 'execution' && <ReplayDock currentAction={currentAction} currentStep={currentStep} totalSteps={actions.length} stages={stages} isSnapshot={isSnapshot}

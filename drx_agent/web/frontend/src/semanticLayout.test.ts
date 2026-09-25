@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { expandAncestorsForAction, projectSemanticGraph } from './semanticLayout.ts';
+import { expandAncestorsForAction, projectSemanticGraph, relatedPath } from './semanticLayout.ts';
 import type { SemanticGraph, SemanticNode, SemanticEdge } from './semanticTypes.ts';
 
 function node(id: string, step: number | null = null): SemanticNode {
@@ -11,6 +11,13 @@ function node(id: string, step: number | null = null): SemanticNode {
 function edge(source: string, target: string, relation = 'executes'): SemanticEdge {
   return { id: `${source}-${target}-${relation}`, source, target, relation, label: relation, sourceInfo: { recorded: true } };
 }
+
+test('related paths retain ancestors and descendants without highlighting sibling tool branches', () => {
+  const graph = { nodes: ['root', 'task', 'tool-a', 'tool-b', 'next'].map((id) => node(id)),
+    edges: [edge('root', 'task'), edge('task', 'tool-a'), edge('task', 'tool-b'), edge('tool-a', 'next')] };
+  assert.deepEqual(relatedPath(graph, 'tool-a'), new Set(['tool-a', 'task', 'root', 'next']));
+  assert.deepEqual(relatedPath(graph, 'missing'), new Set());
+});
 
 function tree(): SemanticGraph {
   return {

@@ -61,7 +61,7 @@ export default function SemanticDetails({ node, action, sessionId, relations = [
         <h3 className="detail-block-title semantic-source-heading"><LinkSimple size={14} aria-hidden="true" />关联与来源</h3>
         <dl className="detail-metadata-list semantic-source-list">
           <div><dt>来源位置</dt><dd>{display(source.path)}</dd></div>
-          <div><dt>分组依据</dt><dd>{groupingLabel(source.grouping)}</dd></div>
+          <div><dt>归属依据</dt><dd>{groupingLabel(source.grouping)}</dd></div>
           <div><dt>未解析关联</dt><dd>{display(source.unresolved)}</dd></div>
           {source.unresolvedRelations != null && <div><dt>待解析关系</dt><dd>{display(source.unresolvedRelations)}</dd></div>}
         </dl>
