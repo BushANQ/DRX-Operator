@@ -191,7 +191,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
 
   // Replay advances one saved record per beat; displayed timestamps remain the original times.
   useEffect(() => {
-    if (!isPlaying || disabled) return undefined;
+    if (!isPlaying || disabled || graphView !== 'execution') return undefined;
     const timer = setTimeout(() => {
       const next = currentStep < actions.length - 1 ? currentStep + 1 : isLoop && actions.length > 1 ? 0 : null;
       if (next === null) setIsPlaying(false);
@@ -202,7 +202,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
       }
     }, 1000 / speed);
     return () => clearTimeout(timer);
-  }, [isPlaying, disabled, currentStep, actions, isLoop, speed, follow, semanticGraph]);
+  }, [isPlaying, disabled, currentStep, actions, isLoop, speed, follow, semanticGraph, graphView]);
 
   const selectStep = useCallback((value: number) => {
     if (!Number.isFinite(value) || !actions.length) return;
@@ -215,15 +215,15 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   }, [actions, semanticGraph, follow]);
 
   const togglePlay = useCallback((playing: boolean) => {
-    if (disabled) return;
+    if (disabled || graphView !== 'execution') return;
     if (playing && currentStep === actions.length - 1) setStep(0);
     setSelectedNodeId(null);
     setIsPlaying(playing);
-  }, [disabled, currentStep, actions.length]);
+  }, [disabled, currentStep, actions.length, graphView]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (disabled || !isReplayShortcut(event)) return;
+      if (disabled || graphView !== 'execution' || !isReplayShortcut(event)) return;
       if (event.code === 'Space') {
         event.preventDefault();
         togglePlay(!isPlaying);
@@ -234,7 +234,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [disabled, togglePlay, isPlaying, currentStep, selectStep]);
+  }, [disabled, graphView, togglePlay, isPlaying, currentStep, selectStep]);
 
   useEffect(() => {
     const update = () => setIsFullscreen(Boolean(document.fullscreenElement));
