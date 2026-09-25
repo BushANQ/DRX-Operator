@@ -10,6 +10,20 @@ def snapshot(records=None, kb=None):
 
 
 class DashboardRegressions(unittest.TestCase):
+    def test_empty_records_cannot_generate_successful_operations(self):
+        graph = _session_to_graph(snapshot())
+        self.assertEqual(graph["actions"], [])
+        self.assertEqual(graph["nodes"], [])
+        self.assertEqual(graph["edges"], [])
+
+    def test_error_approval_worker_and_short_messages_are_preserved(self):
+        records = [{"kind": kind, "text": "failure", "status": "error"}
+                   for kind in ["error", "approval", "worker", "message"]]
+        graph = _session_to_graph(snapshot(records))
+        self.assertEqual(len(graph["actions"]), 4)
+        self.assertEqual(graph["actions"][0]["data"], records[0])
+        self.assertFalse(any(action["tool"] == "http_fetch" for action in graph["actions"]))
+
     def test_missing_target_does_not_invent_a_host_port_or_service(self):
         summary = _session_to_graph(snapshot())["summary"]
         self.assertEqual(summary["targetsCount"], 0)

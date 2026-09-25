@@ -469,94 +469,19 @@ def _session_to_graph(raw: dict) -> dict:
         for i, rec in enumerate(transcript_records):
             kind = rec.get("kind")
             role = rec.get("role")
-            tool = rec.get("tool")
-            text = (rec.get("text") or "").strip()
-            inp = rec.get("input", "")
-            out = rec.get("output", "")
-            actor = rec.get("actor", "master")
-
-            if kind == "message":
-                if role == "user":
-                    raw_actions.append({
-                        "category": "调度",
-                        "title": f"用户指令 · {text[:35]}",
-                        "actor": actor,
-                        "tool": "",
-                        "input": text,
-                        "output": "",
-                        "thought": "",
-                    })
-                elif role == "assistant" and len(text) > 20:
-                    first_line = text.split("\n")[0].strip()
-                    if any(k in text for k in ["摸清", "自检", "假设", "验证", "推演", "发现", "候选", "利用", "收尾", "目标", "洞察"]):
-                        raw_actions.append({
-                            "category": "推理",
-                            "title": f"{first_line[:42]}",
-                            "actor": actor,
-                            "tool": "",
-                            "input": "",
-                            "output": "",
-                            "thought": text,
-                        })
-            elif kind == "tool":
-                cmd = ""
-                if isinstance(inp, dict):
-                    cmd = inp.get("command") or inp.get("code") or ""
-                elif isinstance(inp, str):
-                    cmd = inp
-
-                cat = "探测"
-                title = f"执行工具 · {tool}"
-
-                if "id;" in cmd or "WHOAMI" in cmd:
-                    cat = "调度"
-                    title = "准备租户隔离上下文 · 检查系统权限"
-                elif "IFCONFIG" in cmd:
-                    cat = "探测"
-                    title = "获取网络拓扑与内网段配置"
-                elif "DNS" in cmd or "dig" in cmd:
-                    cat = "探测"
-                    title = "检查站点公开索引与结构线索"
-                elif "WORDLIST" in cmd or "nmap" in cmd:
-                    cat = "探测"
-                    title = "装载安全字典与端口探测扫描器"
-                elif "venv" in cmd or "pip" in cmd:
-                    cat = "调度"
-                    title = "注入安全执行沙箱与依赖库"
-                elif "3000" in cmd or "192.168.0.104" in cmd or "curl" in cmd or "http" in cmd:
-                    cat = "探测"
-                    title = f"执行工具 · {tool}"
-                elif tool in ("http_fetch", "parse_http"):
-                    cat = "探测"
-                    title = "解析页面 · 抽取路由、表单与外链候选"
-                elif tool == "update_target":
-                    cat = "探测"
-                    title = "提交认知安全引擎 · 建立研判会话"
-                elif tool in ("blackboard_write", "todo_write"):
-                    cat = "推理"
-                    title = "生成攻击面假设集 · 规划探测队列"
-                elif tool in ("team_vote", "stage_advance"):
-                    cat = "调度"
-                    title = "战役协同 · 推进研判进入下一阶段"
-                elif tool in ("intent_add", "intent_claim"):
-                    cat = "推理"
-                    title = "聚焦候选：信息泄露 / 鉴权 / 注入面"
-                elif "admin" in cmd or "guestbook" in cmd or "api" in cmd:
-                    cat = "利用"
-                    title = "枚举公开接口与静态敏感资源"
-                elif tool in ("record_finding", "evidence_add"):
-                    cat = "证据"
-                    title = "锁定有效攻击路径 · 固化证据链条"
-
-                raw_actions.append({
-                    "category": cat,
-                    "title": title,
-                    "actor": actor,
-                    "tool": tool or "",
-                    "input": inp,
-                    "output": out,
-                    "thought": "",
-                })
+            text = rec.get("text") or ""
+            labels = {"tool": "工具", "approval": "审批", "worker": "协作", "error": "错误", "message": "消息"}
+            category = labels.get(kind, "事件")
+            title = str(rec.get("tool") or text.split("\n", 1)[0] or kind or "无")
+            raw_actions.append({
+                "category": category, "title": title, "actor": rec.get("actor"),
+                "tool": rec.get("tool"), "input": rec.get("input"), "output": rec.get("output"),
+                "thought": text if role == "assistant" else None,
+                "text": text, "timestamp": rec.get("timestamp"), "status": rec.get("status"),
+                "stageKey": rec.get("stageKey") or rec.get("data", {}).get("stageKey"),
+                "stageTitle": rec.get("stageTitle") or rec.get("data", {}).get("stageTitle"),
+                "data": rec,
+            })
     else:
         # Fallback from messages
         for i, msg in enumerate(messages):
@@ -602,11 +527,8 @@ def _session_to_graph(raw: dict) -> dict:
     # Keep every recorded operation, including repeated calls with distinct inputs.
     condensed = raw_actions
     if not condensed:
-        condensed = [
-            {"category": "调度", "title": "任务启动 · AI 漏洞研判", "actor": "master", "tool": "", "input": target_url, "output": "ok", "thought": "初始化研判任务"},
-            {"category": "探测", "title": f"访问站点入口 {target_url}", "actor": "master", "tool": "http_fetch", "input": target_url, "output": "HTTP 200", "thought": "探测入口"},
-            {"category": "推理", "title": "生成攻击面假设集", "actor": "master", "tool": "todo_write", "input": "attack surface", "output": "done", "thought": "分析中"},
-        ]
+        nodes = []
+        edges = []
 
     # Assign smooth timestamps
     timestamps = [
@@ -655,7 +577,9 @@ def _session_to_graph(raw: dict) -> dict:
             "output": str(out_str)[:1000] if out_str else "",
             "fullInput": str(inp_str) if inp_str else "",
             "fullOutput": str(out_str) if out_str else "",
-            "thought": act.get("thought", ""),
+            "thought": act.get("thought"),
+            "text": act.get("text"),
+            "data": act.get("data"),
             "stageKey": st["key"],
             "stageIndex": stage_idx + 1,
             "stageTitle": st["title"],
