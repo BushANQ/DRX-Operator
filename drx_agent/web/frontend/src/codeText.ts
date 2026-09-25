@@ -1,7 +1,14 @@
 export function formatJsonText(source: string): string | null {
+  if (source.length > 50000) return source;
   try { JSON.parse(source); } catch { return null; }
   const tokens = source.match(/"(?:\\.|[^"\\])*"|[{}[\],:]|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g);
   if (!tokens) return null;
+  let nesting = 0;
+  for (const token of tokens) {
+    if (token === '{' || token === '[') nesting += 1;
+    if (token === '}' || token === ']') nesting -= 1;
+    if (nesting > 64) return source;
+  }
   const pieces: string[] = [];
   let depth = 0;
   const newline = () => pieces.push('\n', '  '.repeat(depth));
