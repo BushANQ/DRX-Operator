@@ -10,7 +10,6 @@ interface ActionStreamProps {
   actions: ReplayAction[];
   currentStep: number;
   isSnapshot: boolean;
-  onSelectStep: (step: number) => void;
   summary: SessionSummary;
   view: StreamView;
   onViewChange: (view: StreamView) => void;
@@ -43,7 +42,6 @@ export default function ActionStream({
   actions,
   currentStep,
   isSnapshot,
-  onSelectStep,
   summary,
   view,
   onViewChange,
@@ -145,7 +143,7 @@ export default function ActionStream({
                     type="button"
                     className="action-item-open"
                     aria-label={`第 ${index + 1} 条：${display(action.title)}，查看详情`}
-                    onClick={() => { onSelectStep(index); onOpenAction(index); }}
+                    onClick={() => onOpenAction(index)}
                   >
                     <span className="action-item-meta">
                       <span className="action-category-badge" style={{ color: presentation.color }}>{display(action.category || action.kind)}</span>

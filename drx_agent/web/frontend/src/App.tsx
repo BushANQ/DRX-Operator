@@ -75,6 +75,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const [graphView, setGraphView] = useState<'execution' | 'causal'>('execution');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [inspectedActionId, setInspectedActionId] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const semanticGraph = graph.graphs?.[graphView] ?? EMPTY_SEMANTIC;
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth >= 850);
@@ -111,16 +112,15 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const openAction = useCallback((value: number) => {
     const action = actions[value];
     if (!action) return;
-    setStep(value);
+    setInspectedActionId(action.id);
     setSelectedNodeId(null);
     setIsPlaying(false);
     setInspectorOpen(true);
-    setFollow(true);
-    setCollapsed((old) => expandAncestorsForAction(semanticGraph, action.id, old));
+    setFollow(false);
     if (window.innerWidth < 850) setSidebarVisible(false);
-  }, [actions, semanticGraph]);
+  }, [actions]);
   const openEntity = useCallback((node: SemanticNode) => {
-    if (node.actionId !== null && node.step !== null) setStep(node.step);
+    setInspectedActionId(null);
     setSelectedNodeId(node.id);
     setInspectorOpen(true);
     setIsPlaying(false);
@@ -159,8 +159,9 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     if (node) void flow.setViewport({ x: anchor.x - node.position.x * anchor.zoom, y: anchor.y - node.position.y * anchor.zoom, zoom: anchor.zoom }, { duration: 0 });
   }, [flow, layoutProjection.nodes]);
   const inspectorNode = selectedNodeId ? semanticGraph.nodes.find((node) => node.id === selectedNodeId) ?? null
-    : semanticGraph.nodes.find((node) => node.actionId === currentAction?.id) ?? null;
-  const inspectorAction = selectedNodeId ? actions.find((action) => action.id === inspectorNode?.actionId) ?? null : currentAction;
+    : semanticGraph.nodes.find((node) => node.actionId === (inspectedActionId ?? currentAction?.id)) ?? null;
+  const inspectorAction = selectedNodeId ? actions.find((action) => action.id === inspectorNode?.actionId) ?? null
+    : inspectedActionId ? actions.find((action) => action.id === inspectedActionId) ?? null : currentAction;
   const initialView = useRef('');
 
   useEffect(() => {
@@ -220,6 +221,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     const next = Math.max(0, Math.min(Math.round(value), actions.length - 1));
     setStep(next);
     setSelectedNodeId(null);
+    setInspectedActionId(null);
     setIsPlaying(false);
     const action = actions[next];
     if (action && follow) setCollapsed((old) => expandAncestorsForAction(semanticGraph, action.id, old));
@@ -229,6 +231,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     if (disabled || graphView !== 'execution') return;
     if (playing && (isSnapshot || currentStep === actions.length - 1)) setStep(0);
     setSelectedNodeId(null);
+    setInspectedActionId(null);
     setIsPlaying(playing);
   }, [disabled, currentStep, actions.length, graphView, isSnapshot]);
 
@@ -281,11 +284,12 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   }, []);
 
   const sessionName = summary.name ?? sessions.find((item) => item.id === selectedSessionId)?.name ?? selectedSessionId;
-  const closeInspector = useCallback(() => setInspectorOpen(false), []);
+  const closeInspector = useCallback(() => { setInspectorOpen(false); setSelectedNodeId(null); setInspectedActionId(null); }, []);
   const changeView = (view: 'execution' | 'causal') => {
     setHoveredNodeId(null);
     setGraphView(view);
     setSelectedNodeId(null);
+    setInspectedActionId(null);
     setInspectorOpen(false);
     setIsPlaying(false);
     setFollow(true);
@@ -350,7 +354,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
         </main>
         {sidebarVisible && <div className="workspace-activity" id="session-sidebar">
           {loading || error ? <div className="workspace-empty"><Info size={24} /><p>{loading ? '正在加载记录…' : '会话记录未加载'}</p></div> :
-            <ActionStream actions={actions} currentStep={currentStep} isSnapshot={isSnapshot} onSelectStep={selectStep} onOpenAction={openAction}
+            <ActionStream actions={actions} currentStep={currentStep} isSnapshot={isSnapshot} onOpenAction={openAction}
               summary={summary} view={panelView} onViewChange={setPanelView} />}
         </div>}
       </div>
