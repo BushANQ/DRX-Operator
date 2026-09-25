@@ -349,3 +349,6 @@ button { transition: color 140ms, background 140ms, border-color 140ms; }
 .semantic-node-action { padding-top: 15px; }
 .semantic-node-action .semantic-node-title { height: 18px; font-size: 11px; -webkit-line-clamp: 1; }
 .semantic-node-action .semantic-node-footer { margin-top: 7px; }
+.causal-view .graph-legend { bottom: 20px; }
+.causal-view .react-flow__minimap { bottom: 16px !important; }
+.semantic-relations { margin: 14px 0; }

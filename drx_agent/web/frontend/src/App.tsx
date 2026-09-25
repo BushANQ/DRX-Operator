@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { ReactFlow, Background, MiniMap } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import SemanticNodeCard from './SemanticNodeCard.tsx';
+import SemanticNodeCard, { SemanticKindChip } from './SemanticNodeCard.tsx';
 import { projectSemanticGraph, expandAncestorsForAction, SEMANTIC_NODE_WIDTH, SEMANTIC_NODE_HEIGHT } from './semanticLayout.ts';
 import type { SemanticNode, SemanticGraph, SemanticFlowNode, SemanticFlowEdge, SemanticPositions, SemanticMeasurements } from './semanticTypes.ts';
 import TopReplayBanner from './TopReplayBanner';
@@ -278,7 +278,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
       <div className={`workspace-body ${sessionsVisible ? '' : 'sessions-collapsed'} ${sidebarVisible ? '' : 'activity-collapsed'}`}>
         {sessionsVisible && <SessionSidebar sessions={sessions} selectedSessionId={selectedSessionId} onSelectSession={onSelectSession}
           loading={listStatus === 'loading'} error={listError} onRefresh={onRetryList} onClose={() => setSessionsVisible(false)} />}
-        <main className="canvas-stage" aria-label={graphView === 'execution' ? '执行图' : '因果图'}>
+        <main className={`canvas-stage ${graphView === 'causal' ? 'causal-view' : ''}`} aria-label={graphView === 'execution' ? '执行图' : '因果图'}>
           <div className="graph-surface" ref={canvasRef}>
             {loading || error || !selectedSessionId || graphMissing || !hasGraph ? (
               <div className="workspace-empty" role={error ? 'alert' : 'status'}>
@@ -304,20 +304,23 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
             <button className="icon-button" disabled={graphDisabled} aria-label="放大图谱" title="放大" onClick={() => { setFollow(false); void flow?.zoomIn({ duration: 160 }); }}><Plus size={17} /></button>
             <button className="icon-button" disabled={graphDisabled} aria-label="缩小图谱" title="缩小" onClick={() => { setFollow(false); void flow?.zoomOut({ duration: 160 }); }}><Minus size={17} /></button>
             <button className="icon-button" disabled={graphDisabled} aria-label="查看全图" title="查看全图" onClick={() => { setFollow(false); const viewport = overviewViewport(projected.nodes, canvasWidth, canvasHeight, inspectorOpen); if (viewport) void flow?.setViewport(viewport, { duration: 220 }); }}><CornersOut size={18} /></button>
-            <button className="icon-button" disabled={graphDisabled || !collapsed.size} aria-label="展开全部分支" title="展开全部分支" onClick={() => setCollapsed(new Set())}><TreeStructure size={18} /></button>
+            <button className="icon-button" disabled={graphDisabled || !semanticGraph.nodes.some((node) => collapsed.has(node.id))} aria-label="展开全部分支" title="展开全部分支" onClick={() => setCollapsed((old) => new Set([...old].filter((id) => !semanticGraph.nodes.some((node) => node.id === id))))}><TreeStructure size={18} /></button>
             <div className="tool-separator" />
             <button className={`icon-button ${follow ? 'is-active' : ''}`} disabled={graphDisabled} aria-label={follow ? '关闭跟随当前记录' : '跟随当前记录'} aria-pressed={follow} title="跟随当前记录" onClick={() => { setFollow((value) => !value); if (!follow && currentAction) { setStep(currentStep); setCollapsed((old) => expandAncestorsForAction(semanticGraph, currentAction.id, old)); locateCurrent(); } }}><Crosshair size={18} /></button>
             <button className={`icon-button ${mapVisible ? 'is-active' : ''}`} disabled={graphDisabled} aria-label="显示缩略图" aria-pressed={mapVisible} title="缩略图" onClick={() => setMapVisible((value) => !value)}><MapTrifold size={18} /></button>
           </div>
           <button className="panel-handle panel-handle-left" aria-label={sessionsVisible ? '收起会话列表' : '展开会话列表'} aria-expanded={sessionsVisible} onClick={() => setSessionsVisible((value) => !value)}>{sessionsVisible ? <CaretLeft size={14} /> : <CaretRight size={14} />}</button>
           <button className="panel-handle panel-handle-right" aria-label={sidebarVisible ? '收起事件日志' : '展开事件日志'} aria-expanded={sidebarVisible} onClick={() => setSidebarVisible((value) => !value)}>{sidebarVisible ? <CaretRight size={14} /> : <CaretLeft size={14} />}</button>
-          {!mapVisible && <div className="graph-legend" aria-label="记录状态图例"><span>状态图例</span><span><Circle size={8} weight="fill" className="legend-complete" />已完成</span><span><Circle size={8} weight="fill" className="legend-running" />进行中</span><span><Circle size={8} weight="fill" className="legend-error" />失败 / 拒绝</span><span><Circle size={8} weight="fill" className="legend-unknown" />无状态记录</span></div>}
+          {!mapVisible && <div className="graph-legend" aria-label={graphView === 'causal' ? '节点类型图例' : '记录状态图例'}>
+            {graphView === 'causal' ? <><span>节点类型</span>{['fact', 'evidence', 'hypothesis', 'finding', 'reference'].map((kind) => <span key={kind}><SemanticKindChip kind={kind} /></span>)}</>
+              : <><span>状态图例</span><span><Circle size={8} weight="fill" className="legend-complete" />已完成</span><span><Circle size={8} weight="fill" className="legend-running" />进行中</span><span><Circle size={8} weight="fill" className="legend-error" />失败 / 拒绝</span><span><Circle size={8} weight="fill" className="legend-unknown" />无状态记录</span></>}
+          </div>}
           {inspectorOpen && (inspectorNode || inspectorAction) && !loading && !error && <NodeInspector node={inspectorNode} relations={semanticGraph.edges.filter((edge) => edge.source === inspectorNode?.id || edge.target === inspectorNode?.id)} action={inspectorAction} sessionId={summary.sessionId} onClose={closeInspector} />}
-          <ReplayDock currentAction={currentAction} currentStep={currentStep} totalSteps={actions.length} stages={stages}
+          {graphView === 'execution' && <ReplayDock currentAction={currentAction} currentStep={currentStep} totalSteps={actions.length} stages={stages}
             pendingLabel={loading ? '正在读取记录…' : error ? '记录未加载' : null}
             isPlaying={isPlaying && !disabled} speed={speed} isLoop={isLoop} disabled={disabled}
             onTogglePlay={togglePlay} onSetSpeed={setSpeed} onToggleLoop={() => setIsLoop((value) => !value)}
-            onReset={() => { selectStep(0); setFollow(true); }} onStepChange={selectStep} />
+            onReset={() => { selectStep(0); setFollow(true); }} onStepChange={selectStep} />}
         </main>
         {sidebarVisible && <div className="workspace-activity" id="session-sidebar">
           {loading || error ? <div className="workspace-empty"><Info size={24} /><p>{loading ? '正在加载记录…' : '会话记录未加载'}</p></div> :
