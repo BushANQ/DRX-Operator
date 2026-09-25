@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { ReactFlow, Background, MiniMap } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import SemanticEdge from './SemanticEdge.tsx';
 import SemanticNodeCard, { SemanticKindChip } from './SemanticNodeCard.tsx';
 import { projectSemanticGraph, expandAncestorsForAction, SEMANTIC_NODE_WIDTH, SEMANTIC_NODE_HEIGHT } from './semanticLayout.ts';
 import type { SemanticNode, SemanticGraph, SemanticFlowNode, SemanticFlowEdge, SemanticPositions, SemanticMeasurements } from './semanticTypes.ts';
@@ -18,6 +19,7 @@ import { overviewViewport, isReplayShortcut } from './replay.ts';
 const EMPTY: never[] = [];
 const EMPTY_SEMANTIC: SemanticGraph = { nodes: [], edges: [] };
 const semanticNodeTypes = { semanticNode: SemanticNodeCard };
+const semanticEdgeTypes = { semanticEdge: SemanticEdge };
 const EMPTY_GRAPH: GraphResponse = {
   nodes: [], edges: [], actions: [], timeline: [], stages: [], graphs: null,
   summary: { sessionId: '', name: null, createdAt: null, targetHost: null, targetUrl: null, targetNotes: null,
@@ -134,6 +136,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     })) };
   }, [semanticGraph, currentStep, collapsed, positions, measurements, openEntity, toggleBranch]);
   const focusNode = projected.nodes.find((node) => projected.currentNodeIds.includes(node.id));
+
   const inspectorNode = selectedNodeId ? semanticGraph.nodes.find((node) => node.id === selectedNodeId) ?? null
     : semanticGraph.nodes.find((node) => node.actionId === currentAction?.id) ?? null;
   const inspectorAction = selectedNodeId ? actions.find((action) => action.id === inspectorNode?.actionId) ?? null : currentAction;
@@ -288,7 +291,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
                 {!loading && <button className="header-button" onClick={listError || !selectedSessionId ? onRetryList : () => setRetry((value) => value + 1)}><ArrowClockwise size={15} />重新加载</button>}
               </div>
             ) : (
-              <ReactFlow<SemanticFlowNode, SemanticFlowEdge> nodes={projected.nodes} edges={projected.edges} nodeTypes={semanticNodeTypes}
+              <ReactFlow<SemanticFlowNode, SemanticFlowEdge> nodes={projected.nodes} edges={projected.edges} nodeTypes={semanticNodeTypes} edgeTypes={semanticEdgeTypes}
                 onInit={setFlow} onNodesChange={onNodesChange} onMoveStart={(event) => { if (event) setFollow(false); }}
                 onNodeClick={(_event, node) => openEntity(node.data)}
                 nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null}

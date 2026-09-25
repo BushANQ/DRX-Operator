@@ -107,7 +107,10 @@ export function projectSemanticGraph(
   const dag = new Graph<GraphLabel, NodeLabel, EdgeLabel>({ directed: true, multigraph: true });
   dag.setGraph({ rankdir: 'TB', nodesep: 38, ranksep: 76, edgesep: 18, marginx: 28, marginy: 28 });
   for (const node of visible) dag.setNode(node.id, dimensions(node, measurements));
-  for (const edge of visibleEdges) dag.setEdge(edge.source, edge.target, { minlen: 1, weight: 1 }, edge.id);
+  for (const edge of visibleEdges) {
+    const showLabel = ['evidence_for', 'depends_on', 'dependency'].includes(edge.relation);
+    dag.setEdge(edge.source, edge.target, { minlen: 1, weight: 1, width: showLabel ? 128 : 0, height: showLabel ? 18 : 0, labelpos: 'c' }, edge.id);
+  }
   if (visible.length) layout(dag);
   const currentSet = new Set(actualCurrentNodeIds.flatMap((id) => nearestVisibleAncestors(id, incoming, visibleIds)));
   const actualCurrentSet = new Set(actualCurrentNodeIds);
@@ -140,9 +143,10 @@ export function projectSemanticGraph(
   const edges = visibleEdges.map((edge): SemanticFlowEdge => {
     const current = currentSet.has(edge.target);
     const color = current ? '#829fff' : '#586880';
+    const route = positions[edge.source] || positions[edge.target] ? undefined : dag.edge(edge.source, edge.target, edge.id);
     return {
-      id: edge.id, source: edge.source, target: edge.target, type: 'default', label: ['evidence_for', 'depends_on', 'dependency'].includes(edge.relation) ? edge.label : undefined,
-      data: { relation: edge.relation, sourceInfo: edge.sourceInfo },
+      id: edge.id, source: edge.source, target: edge.target, type: 'semanticEdge', label: ['evidence_for', 'depends_on', 'dependency'].includes(edge.relation) ? edge.label : undefined,
+      data: { relation: edge.relation, sourceInfo: edge.sourceInfo, routePoints: route?.points, labelPoint: route && typeof route.x === 'number' && typeof route.y === 'number' ? { x: route.x, y: route.y } : undefined },
       style: { stroke: color, strokeWidth: current ? 1.8 : 1.3, strokeDasharray: edge.relation === 'record_group' ? '4 3' : undefined },
       labelStyle: { fill: '#b4c4dc', fontSize: 10 },
       labelBgStyle: { fill: '#0b1120', fillOpacity: 0.95 },

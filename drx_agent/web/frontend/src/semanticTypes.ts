@@ -41,6 +41,8 @@ export interface SemanticNodeData extends Record<string, unknown>, SemanticNode 
 }
 
 export interface SemanticEdgeData extends Record<string, unknown> {
+  routePoints?: XYPosition[];
+  labelPoint?: XYPosition;
   relation: string;
   sourceInfo: Record<string, unknown>;
 }
