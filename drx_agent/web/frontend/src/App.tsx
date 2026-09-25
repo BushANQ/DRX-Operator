@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import { ReactFlow, Background, MiniMap } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import SemanticEdge from './SemanticEdge.tsx';
@@ -85,6 +85,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
   const [fullscreenError, setFullscreenError] = useState('');
   const canvasRef = useRef<HTMLDivElement>(null);
+  const collapseAnchor = useRef<{ id: string; x: number; y: number; zoom: number } | null>(null);
   useEffect(() => {
     const tablet = window.matchMedia('(max-width: 1099px)');
     const mobile = window.matchMedia('(max-width: 849px)');
@@ -125,9 +126,12 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     if (window.innerWidth < 850) setSidebarVisible(false);
   }, []);
   const toggleBranch = useCallback((id: string) => {
+    const node = flow?.getNode(id);
+    const viewport = flow?.getViewport();
+    if (node && viewport) collapseAnchor.current = { id, x: node.position.x * viewport.zoom + viewport.x, y: node.position.y * viewport.zoom + viewport.y, zoom: viewport.zoom };
     setFollow(false);
     setCollapsed((old) => { const next = new Set(old); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  }, []);
+  }, [flow]);
   const projected = useMemo(() => {
     const projection = projectSemanticGraph(semanticGraph, currentStep, collapsed, positions, measurements);
     return { ...projection, nodes: projection.nodes.map((node) => ({
@@ -136,7 +140,13 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     })) };
   }, [semanticGraph, currentStep, collapsed, positions, measurements, openEntity, toggleBranch]);
   const focusNode = projected.nodes.find((node) => projected.currentNodeIds.includes(node.id));
-
+  useLayoutEffect(() => {
+    const anchor = collapseAnchor.current;
+    if (!anchor || !flow) return;
+    const node = projected.nodes.find((item) => item.id === anchor.id);
+    collapseAnchor.current = null;
+    if (node) void flow.setViewport({ x: anchor.x - node.position.x * anchor.zoom, y: anchor.y - node.position.y * anchor.zoom, zoom: anchor.zoom }, { duration: 0 });
+  }, [flow, projected.nodes]);
   const inspectorNode = selectedNodeId ? semanticGraph.nodes.find((node) => node.id === selectedNodeId) ?? null
     : semanticGraph.nodes.find((node) => node.actionId === currentAction?.id) ?? null;
   const inspectorAction = selectedNodeId ? actions.find((action) => action.id === inspectorNode?.actionId) ?? null : currentAction;
