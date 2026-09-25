@@ -19,7 +19,7 @@ export const SessionCardNode = memo(({ data }) => {
       </div>
       <div className="rf-card-title">{data.label || '研判会话'}</div>
       <div className="rf-card-target" title={data.target}>
-        {data.target || '192.168.0.104:3000'}
+        {data.target || '无'}
       </div>
       {data.sub && <div className="rf-card-subtitle">{data.sub}</div>}
 

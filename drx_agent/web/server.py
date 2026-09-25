@@ -18,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
+from drx_agent.web.graph import _target_summary
+
 logger = logging.getLogger(__name__)
 
 
@@ -203,20 +205,16 @@ def _session_to_graph(raw: dict) -> dict:
     raw_creds = kb_data.get("credentials", {})
     creds_list = records_by_host(raw_creds)
 
-    target_host = "l******.com"
-    target_notes = "站点目标研判 · 端口 3000 · Node.js"
-    if targets_list:
-        t0 = targets_list[0]
-        if isinstance(t0, dict):
-            target_host = t0.get("host") or list(raw_targets.keys())[0]
-            ports = t0.get("open_ports", [3000])
-            port_str = ", ".join(str(p) for p in ports) if ports else "3000"
-            services = list(t0.get("services", {}).values())
-            svc_str = services[0] if services else "Node.js"
-            target_notes = f"目标 {target_host} · 端口 {port_str} · {svc_str[:25]}"
-        elif isinstance(t0, str):
-            target_host = t0
-    target_url = f"http://{target_host}:3000" if ":" not in str(target_host) else f"http://{target_host}"
+    if not targets_list:
+        targets_list = [dict(item) if isinstance(item, dict) else {"host": item}
+                        for item in metadata.get("active_targets", [])]
+    else:
+        targets_list = [dict(item) if isinstance(item, dict) else {"host": item}
+                        for item in targets_list]
+        if isinstance(raw_targets, dict):
+            for item, host in zip(targets_list, raw_targets):
+                item.setdefault("host", host)
+    target_host, target_url, target_notes = _target_summary(targets_list)
 
     session_name = raw.get("name") or raw.get("id") or "研判回放"
 
@@ -527,7 +525,7 @@ def _session_to_graph(raw: dict) -> dict:
                     title = "注入安全执行沙箱与依赖库"
                 elif "3000" in cmd or "192.168.0.104" in cmd or "curl" in cmd or "http" in cmd:
                     cat = "探测"
-                    title = f"访问站点入口 {target_url}"
+                    title = f"执行工具 · {tool}"
                 elif tool in ("http_fetch", "parse_http"):
                     cat = "探测"
                     title = "解析页面 · 抽取路由、表单与外链候选"

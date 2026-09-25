@@ -253,11 +253,11 @@ export default function ActionStream({
             <div className="findings-list">
               <div className="finding-item-box">
                 <div className="finding-item-header">
-                  <span className="finding-badge target-badge">ACTIVE TARGET</span>
-                  <span className="finding-host">{summary.targetHost || '192.168.0.104'}</span>
+                  <span className="finding-badge target-badge">目标记录</span>
+                  <span className="finding-host">{summary.targetHost || '无'}</span>
                 </div>
                 <div className="finding-item-content">
-                  {summary.targetNotes || 'Node.js 应用「奶龙集成馆」· 端口 3000 · 局域网直连'}
+                  {summary.targetNotes || '无'}
                 </div>
               </div>
             </div>
