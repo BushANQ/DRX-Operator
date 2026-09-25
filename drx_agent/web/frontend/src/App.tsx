@@ -77,6 +77,20 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
   const [fullscreenError, setFullscreenError] = useState('');
   const canvasRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const tablet = window.matchMedia('(max-width: 1099px)');
+    const mobile = window.matchMedia('(max-width: 849px)');
+    const collapsePanels = () => {
+      if (tablet.matches) setSessionsVisible(false);
+      if (mobile.matches) setSidebarVisible(false);
+    };
+    tablet.addEventListener('change', collapsePanels);
+    mobile.addEventListener('change', collapsePanels);
+    return () => {
+      tablet.removeEventListener('change', collapsePanels);
+      mobile.removeEventListener('change', collapsePanels);
+    };
+  }, []);
   const loading = listStatus === 'loading' || session.status === 'loading';
   const error = listError || session.error;
   const disabled = loading || Boolean(error) || !actions.length;
@@ -85,6 +99,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     setStep(value);
     setIsPlaying(false);
     setInspectorOpen(true);
+    if (window.innerWidth < 850) setSidebarVisible(false);
   }, []);
   const projected = useMemo(() => {
     const projection = projectReplay(graph, currentStep, canvasWidth, positions, measurements, layout);
