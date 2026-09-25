@@ -1,11 +1,13 @@
-import { memo } from 'react';
+import { memo, type CSSProperties } from 'react';
+import type { NodeProps } from '@xyflow/react';
+import type { ReplayNode } from './types.ts';
 import { Handle, Position } from '@xyflow/react';
 
-const display = (value) => value == null || value === '' ? '无' : String(value);
+const display = (value: unknown) => value == null || value === '' ? '无' : String(value);
 
 // React Flow consumes these components through the stable nodeTypes registry below.
 // oxlint-disable-next-line react/only-export-components
-const EventNode = memo(({ data, selected }) => {
+const EventNode = memo(({ data, selected }: NodeProps<ReplayNode>) => {
   const isCurrent = data.current ?? data._current ?? false;
   const isPending = data.pending ?? data._pending ?? false;
   const isSelected = selected || data.selected;
@@ -15,7 +17,7 @@ const EventNode = memo(({ data, selected }) => {
   return (
     <div
       className={`rf-event-card ${isCurrent ? 'current' : ''} ${isPending ? 'pending' : ''} ${isSelected ? 'selected' : ''}`}
-      style={{ '--card-color': color, width: 260, minHeight: 112 }}
+      style={{ '--card-color': color, width: 260, minHeight: 112 } as CSSProperties}
     >
       <Handle isConnectable={false} type="target" position={data.targetSide || Position.Top} style={{ background: color }} />
       <div className="rf-card-badge-row">

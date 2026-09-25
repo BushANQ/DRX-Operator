@@ -4,16 +4,23 @@ import '@xyflow/react/dist/style.css';
 import { nodeTypes } from './nodes';
 import TopReplayBanner from './TopReplayBanner';
 import ActionStream from './ActionStream';
-import { useRemoteJSON } from './useRemoteJSON.js';
-import { projectReplay, isReplayShortcut, NODE_WIDTH, NODE_HEIGHT } from './replay.js';
+import { useSessionList, useSessionGraph } from './useRemoteJSON.ts';
+import type { ReactFlowInstance, NodeChange } from '@xyflow/react';
+import type { GraphResponse, ReplayNode, ReplayEdge, NodePositions, NodeMeasurements, SessionListItem, RemoteStatus } from './types.ts';
+import { projectReplay, isReplayShortcut, NODE_WIDTH, NODE_HEIGHT } from './replay.ts';
 
-const EMPTY = [];
-const EMPTY_GRAPH = { nodes: EMPTY, edges: EMPTY, actions: EMPTY, stages: EMPTY, summary: {} };
+const EMPTY: never[] = [];
+const EMPTY_GRAPH: GraphResponse = {
+  nodes: [], edges: [], actions: [], timeline: [], stages: [],
+  summary: { sessionId: '', name: null, createdAt: null, targetHost: null, targetUrl: null, targetNotes: null,
+    totalActions: 0, totalStages: 0, targetsCount: 0, findingsCount: 0, verifiedFindingsCount: 0, credsCount: 0,
+    targets: [], findings: [], creds: [] },
+};
 
 export default function App() {
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listRetry, setListRetry] = useState(0);
-  const list = useRemoteJSON('/api/sessions', listRetry);
+  const list = useSessionList(listRetry);
   const sessions = list.data ?? EMPTY;
   const selectedSessionId = sessions.some((session) => session.id === selectedId)
     ? selectedId : sessions[0]?.id ?? null;
@@ -30,9 +37,18 @@ export default function App() {
   );
 }
 
-function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listStatus, listError, onRetryList }) {
+interface WorkspaceProps {
+  sessions: SessionListItem[];
+  selectedSessionId: string | null;
+  onSelectSession: (id: string) => void;
+  listStatus: RemoteStatus;
+  listError: string;
+  onRetryList: () => void;
+}
+
+function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listStatus, listError, onRetryList }: WorkspaceProps) {
   const [retry, setRetry] = useState(0);
-  const session = useRemoteJSON(selectedSessionId ? `/api/sessions/${encodeURIComponent(selectedSessionId)}` : null, retry, selectedSessionId);
+  const session = useSessionGraph(selectedSessionId, retry);
   const graph = session.data ?? EMPTY_GRAPH;
   const { actions, stages, summary } = graph;
   const [step, setStep] = useState(0);
@@ -44,19 +60,19 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const [detailRequestId, setDetailRequestId] = useState(0);
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth >= 850);
   const [follow, setFollow] = useState(true);
-  const [positions, setPositions] = useState({});
-  const [measurements, setMeasurements] = useState({});
-  const [flow, setFlow] = useState(null);
+  const [positions, setPositions] = useState<NodePositions>({});
+  const [measurements, setMeasurements] = useState<NodeMeasurements>({});
+  const [flow, setFlow] = useState<ReactFlowInstance<ReplayNode, ReplayEdge> | null>(null);
   const [canvasWidth, setCanvasWidth] = useState(900);
   const [canvasHeight, setCanvasHeight] = useState(600);
   const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
   const [fullscreenError, setFullscreenError] = useState('');
-  const canvasRef = useRef(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
   const loading = listStatus === 'loading' || session.status === 'loading';
   const error = listError || session.error;
   const disabled = loading || Boolean(error) || !actions.length;
   const hasActions = actions.length > 0;
-  const openNode = useCallback((value) => {
+  const openNode = useCallback((value: number) => {
     setStep(value);
     setIsPlaying(false);
     setSidebarVisible(true);
@@ -103,20 +119,20 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     return () => clearTimeout(timer);
   }, [isPlaying, disabled, currentStep, actions.length, isLoop, speed]);
 
-  const selectStep = useCallback((value) => {
+  const selectStep = useCallback((value: number) => {
     if (!Number.isFinite(value) || !actions.length) return;
     setStep(Math.max(0, Math.min(Math.round(value), actions.length - 1)));
     setIsPlaying(false);
   }, [actions.length]);
 
-  const togglePlay = useCallback((playing) => {
+  const togglePlay = useCallback((playing: boolean) => {
     if (disabled) return;
     if (playing && currentStep === actions.length - 1) setStep(0);
     setIsPlaying(playing);
   }, [disabled, currentStep, actions.length]);
 
   useEffect(() => {
-    const onKeyDown = (event) => {
+    const onKeyDown = (event: KeyboardEvent) => {
       if (disabled || !isReplayShortcut(event)) return;
       if (event.code === 'Space') {
         event.preventDefault();
@@ -146,23 +162,21 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     }
   };
 
-  const onNodesChange = useCallback((changes) => {
-    const measured = changes.filter((change) => change.type === 'dimensions' && change.dimensions);
-    if (measured.length) setMeasurements((old) => {
-      const changed = measured.filter(({ id, dimensions }) => old[id]?.width !== dimensions.width || old[id]?.height !== dimensions.height);
+  const onNodesChange = useCallback((changes: NodeChange<ReplayNode>[]) => {
+    const measured: NodeMeasurements = {};
+    const moved: NodePositions = {};
+    for (const change of changes) {
+      if (change.type === 'dimensions' && change.dimensions) measured[change.id] = change.dimensions;
+      if (change.type === 'position' && change.position) moved[change.id] = change.position;
+    }
+    if (Object.keys(measured).length) setMeasurements((old) => {
+      const changed = Object.entries(measured).filter(([id, dimensions]) => old[id]?.width !== dimensions.width || old[id]?.height !== dimensions.height);
       if (!changed.length) return old;
-      const next = { ...old };
-      for (const change of changed) next[change.id] = change.dimensions;
-      return next;
+      return { ...old, ...Object.fromEntries(changed) };
     });
-    const moved = changes.filter((change) => change.type === 'position' && change.position);
-    if (!moved.length) return;
+    if (!Object.keys(moved).length) return;
     setFollow(false);
-    setPositions((old) => {
-      const next = { ...old };
-      for (const change of moved) next[`${projected.columns}:${change.id}`] = change.position;
-      return next;
-    });
+    setPositions((old) => ({ ...old, ...Object.fromEntries(Object.entries(moved).map(([id, position]) => [`${projected.columns}:${id}`, position])) }));
   }, [projected.columns]);
 
   return (
@@ -197,7 +211,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
             </div>
             <div className="graph-surface" ref={canvasRef}>
               {!actions.length ? <div className="workspace-empty">无动作记录</div> : (
-                <ReactFlow
+                <ReactFlow<ReplayNode, ReplayEdge>
                   nodes={projected.nodes} edges={projected.edges} nodeTypes={nodeTypes}
                   onInit={setFlow} onNodesChange={onNodesChange}
                   onMoveStart={(event) => { if (event) setFollow(false); }}
@@ -208,7 +222,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
                 >
                   <Background color="#203041" gap={24} size={1} />
                   <Controls showFitView={false} showInteractive={false} />
-                  <MiniMap nodeColor={(node) => node.data.color ?? '#4897ad'} maskColor="rgba(4, 9, 17, 0.72)" pannable zoomable />
+                  <MiniMap nodeColor={(node) => typeof node.data.color === 'string' ? node.data.color : '#4897ad'} maskColor="rgba(4, 9, 17, 0.72)" pannable zoomable />
                 </ReactFlow>
               )}
             </div>

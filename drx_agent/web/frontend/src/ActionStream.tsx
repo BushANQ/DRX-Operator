@@ -1,20 +1,27 @@
 import { useState, useEffect, useRef } from 'react';
+import type { ReplayAction, SessionSummary } from './types.ts';
 
-function hasValue(value) {
+type ViewTab = 'stream' | 'detail' | 'findings';
+interface ActionStreamProps {
+  actions?: ReplayAction[]; currentStep?: number; onSelectStep: (step: number) => void;
+  selectedAction?: ReplayAction | null; detailRequestId?: number; summary: SessionSummary;
+}
+
+function hasValue(value: unknown) {
   return value != null && value !== '';
 }
 
-function display(value) {
+function display(value: unknown) {
   if (!hasValue(value)) return '无';
-  if (typeof value === 'object') return Object.keys(value).length ? JSON.stringify(value, null, 2) : '无';
+  if (typeof value === 'object' && value !== null) return Object.keys(value).length ? JSON.stringify(value, null, 2) : '无';
   return String(value);
 }
 
-function asRecord(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function findingConfirmation(finding) {
+function findingConfirmation(finding: Record<string, unknown>) {
   if (finding.status === 'retracted') return '已撤回';
   if (finding.superseded_by) return '已被后续记录替代';
   if (finding.verified === true || finding.status === 'confirmed' || finding.status === 'exploited') return '已证实';
@@ -22,11 +29,11 @@ function findingConfirmation(finding) {
   return '无';
 }
 
-function CountCard({ value, label }) {
+function CountCard({ value, label }: { value: unknown; label: string }) {
   return <div className="stat-card"><div className="stat-num">{display(value)}</div><div className="stat-label">{label}</div></div>;
 }
 
-function RecordDetails({ value, label }) {
+function RecordDetails({ value, label }: { value: unknown; label: string }) {
   return (
     <details className="record-source-details">
       <summary>完整{label}记录</summary>
@@ -41,12 +48,12 @@ export default function ActionStream({
   onSelectStep,
   selectedAction = null,
   detailRequestId = 0,
-  summary = {},
-}) {
-  const [tabSelection, setTabSelection] = useState({ tab: 'stream', requestId: 0 });
-  const [copyFeedback, setCopyFeedback] = useState(null);
-  const activeItemRef = useRef(null);
-  const detailBodyRef = useRef(null);
+  summary,
+}: ActionStreamProps) {
+  const [tabSelection, setTabSelection] = useState<{ tab: ViewTab; requestId: number }>({ tab: 'stream', requestId: 0 });
+  const [copyFeedback, setCopyFeedback] = useState<{ actionId: string | undefined; sessionId: string; message: string } | null>(null);
+  const activeItemRef = useRef<HTMLButtonElement>(null);
+  const detailBodyRef = useRef<HTMLDivElement>(null);
   const currentAction = selectedAction ?? actions[currentStep] ?? null;
   const activeTab = detailRequestId > 0 && detailRequestId !== tabSelection.requestId ? 'detail' : tabSelection.tab;
   const copyStatus = copyFeedback?.actionId === currentAction?.id && copyFeedback?.sessionId === summary.sessionId ? copyFeedback?.message : '';
@@ -55,7 +62,7 @@ export default function ActionStream({
   const creds = Array.isArray(summary.creds) ? summary.creds : [];
   const displayedStep = actions.length ? Math.min(currentStep + 1, actions.length) : 0;
 
-  function setActiveTab(tab) {
+  function setActiveTab(tab: ViewTab) {
     setTabSelection({ tab, requestId: detailRequestId });
   }
 
@@ -67,7 +74,7 @@ export default function ActionStream({
     if (detailBodyRef.current) detailBodyRef.current.scrollTop = 0;
   }, [currentAction?.id, summary.sessionId]);
 
-  async function handleCopy(value) {
+  async function handleCopy(value: unknown) {
     try {
       await navigator.clipboard.writeText(display(value));
       setCopyFeedback({ actionId: currentAction?.id, sessionId: summary.sessionId, message: '已复制' });
@@ -76,7 +83,7 @@ export default function ActionStream({
     }
   }
 
-  function dataBlock(label, value, output = false) {
+  function dataBlock(label: string, value: unknown, output = false) {
     return (
       <section className="detail-block">
         <div className="detail-block-header">

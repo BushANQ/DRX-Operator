@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { projectReplay } from './replay.js';
+import { projectReplay } from './replay.ts';
+import type { GraphResponse } from './types.ts';
 
-const graph = {
-  nodes: Array.from({ length: 100 }, (_, step) => ({ id: `e${step}`, data: { step }, position: { x: 0, y: 0 } })),
+const graph: Pick<GraphResponse, 'nodes' | 'edges'> = {
+  nodes: Array.from({ length: 100 }, (_, step) => ({
+    id: `e${step}`, type: 'eventNode',
+    data: { step, actionId: `e${step}`, title: '记录', subtitle: 'event', status: null, color: '#4897ad' },
+    position: { x: 0, y: 0 },
+  })),
   edges: Array.from({ length: 99 }, (_, i) => ({ id: `s${i}`, source: `e${i}`, target: `e${i + 1}` })),
 };
 
@@ -27,8 +32,9 @@ test('narrow layouts stay within one readable column and preserve manual positio
 
 test('rewind and forward recompute edge colors from source data', () => {
   const late = projectReplay(graph, 4, 900);
+  assert.ok(late.edges[0].style);
   late.edges[0].style.stroke = '#1e293b';
-  assert.equal(projectReplay(graph, 4, 900).edges[0].style.stroke, '#4897ad');
+  assert.equal(projectReplay(graph, 4, 900).edges[0].style?.stroke, '#4897ad');
 });
 
 test('actual node measurements survive replay without inventing measurements for unseen nodes', () => {

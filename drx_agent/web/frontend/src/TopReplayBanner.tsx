@@ -1,9 +1,19 @@
 import { useState, useRef, useEffect } from 'react';
+import type { ReplayAction, ReplayStage, SessionListItem } from './types.ts';
+
+export interface ReplayBannerProps {
+  sessionName?: string | null; sessions?: SessionListItem[]; selectedSessionId: string | null;
+  onSelectSession: (id: string) => void; currentAction: ReplayAction | null; currentStep?: number;
+  totalSteps?: number; stages?: ReplayStage[]; activeStageKey?: string | null;
+  isPlaying?: boolean; onTogglePlay: (playing: boolean) => void; speed?: number; onSetSpeed: (speed: number) => void;
+  isLoop?: boolean; onToggleLoop: () => void; onReset: () => void; onStepChange: (step: number) => void;
+  isFullscreen?: boolean; onToggleFullscreen: () => void; disabled?: boolean; loading?: boolean;
+}
 
 const SPEED_OPTIONS = [0.5, 1, 2, 4];
-const display = (value) => value == null || value === '' ? '无' : String(value);
+const display = (value: unknown) => value == null || value === '' ? '无' : String(value);
 
-function sessionDate(value) {
+function sessionDate(value: string | number | null) {
   if (value == null || value === '') return '无';
   const date = new Date(typeof value === 'number' ? value * 1000 : value);
   return Number.isNaN(date.getTime()) ? '无' : date.toLocaleString('zh-CN');
@@ -31,10 +41,10 @@ export default function TopReplayBanner({
   onToggleFullscreen,
   disabled = false,
   loading = false,
-}) {
+}: ReplayBannerProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = useRef(null);
-  const dropdownButtonRef = useRef(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const dropdownButtonRef = useRef<HTMLButtonElement>(null);
   const stepCount = Number.isInteger(totalSteps) && totalSteps > 0 ? totalSteps : 0;
   const stepIndex = stepCount ? Math.max(0, Math.min(currentStep, stepCount - 1)) : 0;
   const displayedStep = stepCount ? stepIndex + 1 : 0;
@@ -43,10 +53,10 @@ export default function TopReplayBanner({
 
   useEffect(() => {
     if (!dropdownOpen) return;
-    function handleOutsideClick(event) {
-      if (!dropdownRef.current?.contains(event.target)) setDropdownOpen(false);
+    function handleOutsideClick(event: PointerEvent) {
+      if (event.target instanceof Node && !dropdownRef.current?.contains(event.target)) setDropdownOpen(false);
     }
-    function handleEscape(event) {
+    function handleEscape(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         setDropdownOpen(false);
         dropdownButtonRef.current?.focus();
@@ -177,7 +187,7 @@ export default function TopReplayBanner({
           {stages.map((stage) => {
             const isActive = stage.key === activeStageKey;
             const firstIndex = stage.firstActionIndex;
-            const canJump = Number.isInteger(firstIndex) && firstIndex >= 0 && firstIndex < stepCount;
+            const canJump = typeof firstIndex === 'number' && Number.isInteger(firstIndex) && firstIndex >= 0 && firstIndex < stepCount;
             const count = Number.isInteger(stage.count) && stage.count >= 0 ? stage.count : null;
             return (
               <button
