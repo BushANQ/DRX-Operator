@@ -17,7 +17,7 @@ const EventNode = memo(({ data, selected }) => {
       className={`rf-event-card ${isCurrent ? 'current' : ''} ${isPending ? 'pending' : ''} ${isSelected ? 'selected' : ''}`}
       style={{ '--card-color': color, width: 260, minHeight: 112 }}
     >
-      <Handle type="target" position={data.targetSide || Position.Top} style={{ background: color }} />
+      <Handle isConnectable={false} type="target" position={data.targetSide || Position.Top} style={{ background: color }} />
       <div className="rf-card-badge-row">
         <span className="rf-badge event-badge">{Number.isInteger(data.step) ? `记录 ${data.step + 1}` : '记录'}</span>
         <span className="rf-event-status">状态：{display(data.status)}</span>
@@ -29,7 +29,7 @@ const EventNode = memo(({ data, selected }) => {
         <button className="rf-node-open nodrag" type="button" aria-label={`查看记录 ${data.step + 1} 详情`}
           onClick={(event) => { event.stopPropagation(); data.onOpen?.(); }}>详情</button>
       </div>
-      <Handle type="source" position={data.sourceSide || Position.Bottom} style={{ background: color }} />
+      <Handle isConnectable={false} type="source" position={data.sourceSide || Position.Bottom} style={{ background: color }} />
     </div>
   );
 });
