@@ -183,7 +183,7 @@ export default function App() {
   // ---------------- 5. Keyboard shortcuts ----------------
   useEffect(() => {
     function handleKeyDown(e) {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.target.closest?.('input, textarea, button, select, a, [contenteditable="true"], [role="button"]')) return;
 
       if (e.code === 'Space') {
         e.preventDefault();

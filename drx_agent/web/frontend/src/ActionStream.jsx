@@ -88,7 +88,8 @@ export default function ActionStream({
               const isActive = i === currentStep;
 
               return (
-                <div
+                <button
+                  type="button"
                   key={act.id || i}
                   ref={isActive ? activeItemRef : null}
                   className={`action-stream-item ${isActive ? 'active-item' : ''}`}
@@ -113,7 +114,7 @@ export default function ActionStream({
                   <div className="action-item-title" title={act.title}>
                     {act.title}
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>

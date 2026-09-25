@@ -35,7 +35,14 @@ export default function TopReplayBanner({
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') setDropdownOpen(false);
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
   }, []);
 
   // Compute progress percentage
@@ -67,6 +74,7 @@ export default function TopReplayBanner({
                 className="nav-session-btn"
                 onClick={() => setDropdownOpen(!dropdownOpen)}
                 title="切换研判会话"
+                aria-expanded={dropdownOpen}
               >
                 <span>{sessionName}</span>
                 <span className="dropdown-arrow">▾</span>
@@ -76,7 +84,8 @@ export default function TopReplayBanner({
                 <div className="session-dropdown-menu animate-fade-in">
                   <div className="session-dropdown-header">选择研判战役会话</div>
                   {sessions.map((s) => (
-                    <div
+                    <button
+                      type="button"
                       key={s.id}
                       className={`session-dropdown-item ${
                         s.id === selectedSessionId ? 'active' : ''
@@ -92,7 +101,7 @@ export default function TopReplayBanner({
                           ? new Date(s.created_at * 1000).toLocaleString('zh-CN')
                           : ''}
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}
@@ -175,6 +184,7 @@ export default function TopReplayBanner({
         <div className="slider-wrapper">
           <input
             type="range"
+            aria-label="回放动作进度"
             min={0}
             max={Math.max(0, totalSteps - 1)}
             value={currentStep}
@@ -201,7 +211,10 @@ export default function TopReplayBanner({
             const barHeight = Math.min(24, Math.max(0, (st.count ?? 0) * 3));
 
             return (
-              <div
+              <button
+                type="button"
+                disabled={!st.count}
+                aria-pressed={isActive}
                 key={st.key}
                 className={`stage-milestone-step ${isActive ? 'active' : ''} ${
                   isCompleted ? 'completed' : ''
@@ -233,7 +246,7 @@ export default function TopReplayBanner({
                     <span className="stage-name-label">{st.key}</span>
                   </div>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
