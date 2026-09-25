@@ -1,381 +1,208 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import {
-  ReactFlow,
-  Background,
-  Controls,
-  MiniMap,
-  useNodesState,
-  useEdgesState,
-} from '@xyflow/react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { ReactFlow, Background, Controls, MiniMap } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-
 import { nodeTypes } from './nodes';
 import TopReplayBanner from './TopReplayBanner';
 import ActionStream from './ActionStream';
-import { requestJSON } from './api.js';
+import { useRemoteJSON } from './useRemoteJSON.js';
+import { projectReplay, isReplayShortcut, NODE_WIDTH, NODE_HEIGHT } from './replay.js';
 
-const API_BASE = ''; // Proxied in dev, same origin in prod
+const EMPTY = [];
+const EMPTY_GRAPH = { nodes: EMPTY, edges: EMPTY, actions: EMPTY, stages: EMPTY, summary: {} };
 
 export default function App() {
-  // Sessions
-  const [sessions, setSessions] = useState([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+  const [selectedId, setSelectedId] = useState(null);
+  const [listRetry, setListRetry] = useState(0);
+  const list = useRemoteJSON('/api/sessions', listRetry);
+  const sessions = list.data ?? EMPTY;
+  const selectedSessionId = sessions.some((session) => session.id === selectedId)
+    ? selectedId : sessions[0]?.id ?? null;
+  return (
+    <ReplayWorkspace
+      key={selectedSessionId ?? 'no-session'}
+      sessions={sessions}
+      selectedSessionId={selectedSessionId}
+      onSelectSession={setSelectedId}
+      listStatus={list.status}
+      listError={list.error}
+      onRetryList={() => setListRetry((value) => value + 1)}
+    />
+  );
+}
+
+function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listStatus, listError, onRetryList }) {
   const [retry, setRetry] = useState(0);
-  const [selectedSessionId, setSelectedSessionId] = useState(null);
-
-  // Graph Data
-  const [graphData, setGraphData] = useState(null);
-  const [graphLoading, setGraphLoading] = useState(false);
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-
-  // Replay State
-  const [currentStep, setCurrentStep] = useState(0);
+  const session = useRemoteJSON(selectedSessionId ? `/api/sessions/${encodeURIComponent(selectedSessionId)}` : null, retry, selectedSessionId);
+  const graph = session.data ?? EMPTY_GRAPH;
+  const { actions, stages, summary } = graph;
+  const [step, setStep] = useState(0);
+  const currentStep = Math.max(0, Math.min(step, actions.length - 1));
+  const currentAction = actions[currentStep] ?? null;
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [isLoop, setIsLoop] = useState(false);
-  const [selectedNode, setSelectedNode] = useState(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [detailRequestId, setDetailRequestId] = useState(0);
+  const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth >= 850);
+  const [follow, setFollow] = useState(true);
+  const [positions, setPositions] = useState({});
+  const [flow, setFlow] = useState(null);
+  const [canvasWidth, setCanvasWidth] = useState(900);
+  const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
   const [fullscreenError, setFullscreenError] = useState('');
-
-  const timerRef = useRef(null);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let active = true;
-    setSessionsLoading(true);
-    setLoadError('');
-    requestJSON(`${API_BASE}/api/sessions`, { signal: controller.signal })
-      .then((data) => {
-        if (!Array.isArray(data) || data.some((item) => typeof item?.id !== 'string')) {
-          throw new Error('会话列表格式无效');
-        }
-        if (!active) return;
-        setSessions(data);
-        setSelectedSessionId((old) => data.some((item) => item.id === old) ? old : data[0]?.id ?? null);
-      })
-      .catch((error) => {
-        if (!active) return;
-        setSessions([]);
-        setSelectedSessionId(null);
-        setGraphData(null);
-        setNodes([]);
-        setEdges([]);
-        setLoadError(error.message);
-      })
-      .finally(() => { if (active) setSessionsLoading(false); });
-    return () => { active = false; controller.abort(); };
-  }, [retry, setNodes, setEdges]);
+  const canvasRef = useRef(null);
+  const previousWidth = useRef(0);
+  const loading = listStatus === 'loading' || session.status === 'loading';
+  const error = listError || session.error;
+  const disabled = loading || Boolean(error) || !actions.length;
+  const hasActions = actions.length > 0;
+  const projected = useMemo(() => projectReplay(graph, currentStep, canvasWidth, positions), [graph, currentStep, canvasWidth, positions]);
+  const focusNode = projected.nodes.find((node) => node.id === currentAction?.cardId);
 
   useEffect(() => {
-    setGraphData(null);
-    setNodes([]);
-    setEdges([]);
-    setSelectedNode(null);
-    setCurrentStep(0);
+    const element = canvasRef.current;
+    if (!element) return undefined;
+    const observer = new ResizeObserver(([entry]) => setCanvasWidth(entry.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [loading, error, hasActions]);
+
+  const locateCurrent = useCallback(() => {
+    if (!flow || !focusNode) return;
+    const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 250;
+    flow.setCenter(focusNode.position.x + NODE_WIDTH / 2, focusNode.position.y + NODE_HEIGHT / 2, { zoom: 1, duration });
+  }, [flow, focusNode]);
+
+  useEffect(() => {
+    const resized = previousWidth.current !== canvasWidth;
+    previousWidth.current = canvasWidth;
+    if (follow || resized) locateCurrent();
+  }, [follow, canvasWidth, locateCurrent]);
+
+  // Replay advances one saved record per beat; displayed timestamps remain the original times.
+  useEffect(() => {
+    if (!isPlaying || disabled) return undefined;
+    const timer = setTimeout(() => {
+      if (currentStep < actions.length - 1) setStep(currentStep + 1);
+      else if (isLoop && actions.length > 1) setStep(0);
+      else setIsPlaying(false);
+    }, 1000 / speed);
+    return () => clearTimeout(timer);
+  }, [isPlaying, disabled, currentStep, actions.length, isLoop, speed]);
+
+  const selectStep = useCallback((value) => {
+    if (!Number.isFinite(value) || !actions.length) return;
+    setStep(Math.max(0, Math.min(Math.round(value), actions.length - 1)));
     setIsPlaying(false);
-    setGraphLoading(Boolean(selectedSessionId));
-    if (!selectedSessionId) return;
-    const controller = new AbortController();
-    let active = true;
-    setGraphLoading(true);
-    setLoadError('');
-    requestJSON(`${API_BASE}/api/sessions/${encodeURIComponent(selectedSessionId)}`, { signal: controller.signal })
-      .then((data) => {
-        if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges) || !Array.isArray(data.actions)
-            || data.summary?.sessionId !== selectedSessionId) {
-          throw new Error('会话数据格式或归属无效');
-        }
-        if (!active) return;
-        setGraphData(data);
-        setNodes(data.nodes);
-        setEdges(data.edges);
-      })
-      .catch((error) => { if (active) setLoadError(error.message); })
-      .finally(() => { if (active) setGraphLoading(false); });
-    return () => { active = false; controller.abort(); };
-  }, [selectedSessionId, retry, setNodes, setEdges]);
+  }, [actions.length]);
 
-  const actions = graphData?.actions || [];
-  const stages = graphData?.stages || [];
-  const summary = graphData?.summary || {};
-  const totalSteps = actions.length;
-  const currentAction = actions[currentStep] || {};
+  const togglePlay = useCallback((playing) => {
+    if (disabled) return;
+    if (playing && currentStep === actions.length - 1) setStep(0);
+    setIsPlaying(playing);
+  }, [disabled, currentStep, actions.length]);
 
   useEffect(() => {
-    setSelectedNode(null);
-  }, [currentStep]);
-
-  // ---------------- 3. Replay: Update node highlight / lit states ----------------
-  useEffect(() => {
-    if (!graphData || !graphData.nodes) return;
-
-    const curAct = actions[currentStep];
-    const currentCardId = curAct?.cardId || 'session-root';
-    const currentStageIdx = curAct?.stageIndex || 1;
-
-    // Card order across stages:
-    // 1: session-root
-    // 2-4: card-page, card-surface
-    // 5-6: card-hypo, card-fp
-    // 7-8: card-vuln, card-priv
-    // 9: card-evidence, card-report
-    const cardLitOrder = [
-      'session-root',
-      'card-page',
-      'card-surface',
-      'card-hypo',
-      'card-fp',
-      'card-vuln',
-      'card-priv',
-      'card-evidence',
-      'card-report',
-    ];
-
-    const currentCardIndex = cardLitOrder.indexOf(currentCardId);
-    const litCardIds = new Set(
-      cardLitOrder.slice(0, Math.max(1, currentCardIndex + 1))
-    );
-
-    // Update nodes: lit, current, pending
-    setNodes((nds) =>
-      nds.map((node) => {
-        if (node.type === 'phaseGroupNode') {
-          return node;
-        }
-
-        const isCurrent = node.id === currentCardId;
-        const isLit = litCardIds.has(node.id);
-        const isPending = !isLit;
-
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            _current: isCurrent,
-            _lit: isLit,
-            _pending: isPending,
-          },
-        };
-      })
-    );
-
-    // Update edges: active glow for traversed path
-    setEdges(
-      (graphData.edges || []).map((edge) => {
-        const sourceLit = litCardIds.has(edge.source);
-        const targetLit = litCardIds.has(edge.target);
-        const isEdgeLit = sourceLit && targetLit;
-
-        return {
-          ...edge,
-          style: {
-            ...edge.style,
-            stroke: isEdgeLit ? (edge.style?.stroke || '#06b6d4') : '#1e293b',
-            opacity: isEdgeLit ? 1 : 0.25,
-          },
-        };
-      })
-    );
-  }, [currentStep, graphData, actions, setNodes, setEdges]);
-
-  // ---------------- 4. Replay auto-play loop ----------------
-  useEffect(() => {
-    if (isPlaying) {
-      const delay = Math.max(150, Math.round(1000 / speed));
-      timerRef.current = setInterval(() => {
-        setCurrentStep((prev) => {
-          if (prev >= totalSteps - 1) {
-            if (isLoop) {
-              return 0;
-            } else {
-              setIsPlaying(false);
-              return prev;
-            }
-          }
-          return prev + 1;
-        });
-      }, delay);
-    } else {
-      clearInterval(timerRef.current);
-    }
-    return () => clearInterval(timerRef.current);
-  }, [isPlaying, speed, totalSteps, isLoop]);
-
-  // ---------------- 5. Keyboard shortcuts ----------------
-  useEffect(() => {
-    function handleKeyDown(e) {
-      if (e.target.closest?.('input, textarea, button, select, a, [contenteditable="true"], [role="button"]')) return;
-
-      if (!totalSteps) return;
-      if (e.code === 'Space') {
-        e.preventDefault();
-        setIsPlaying((p) => !p);
-      } else if (e.code === 'ArrowLeft') {
-        e.preventDefault();
-        setCurrentStep((p) => Math.max(0, p - 1));
-      } else if (e.code === 'ArrowRight') {
-        e.preventDefault();
-        setCurrentStep((p) => Math.min(totalSteps - 1, p + 1));
+    const onKeyDown = (event) => {
+      if (disabled || !isReplayShortcut(event)) return;
+      if (event.code === 'Space') {
+        event.preventDefault();
+        togglePlay(!isPlaying);
+      } else if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
+        event.preventDefault();
+        selectStep(currentStep + (event.code === 'ArrowLeft' ? -1 : 1));
       }
-    }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [totalSteps]);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [disabled, togglePlay, isPlaying, currentStep, selectStep]);
 
-  // Fullscreen toggle
   useEffect(() => {
-    const updateFullscreen = () => setIsFullscreen(Boolean(document.fullscreenElement));
-    document.addEventListener('fullscreenchange', updateFullscreen);
-    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+    const update = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', update);
+    return () => document.removeEventListener('fullscreenchange', update);
   }, []);
 
-  const handleToggleFullscreen = useCallback(async () => {
+  const toggleFullscreen = async () => {
     setFullscreenError('');
     try {
-      if (!document.fullscreenElement) {
-        await document.documentElement.requestFullscreen();
-      } else {
-        await document.exitFullscreen();
-      }
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
     } catch {
       setFullscreenError('全屏切换失败，请重试。');
     }
-  }, []);
+  };
 
-  // Handle node click
-  const onNodeClick = useCallback((_, node) => {
-    setSelectedNode(node);
-  }, []);
+  const onNodesChange = useCallback((changes) => {
+    const moved = changes.filter((change) => change.type === 'position' && change.position);
+    if (!moved.length) return;
+    setFollow(false);
+    setPositions((old) => {
+      const next = { ...old };
+      for (const change of moved) next[`${projected.columns}:${change.id}`] = change.position;
+      return next;
+    });
+  }, [projected.columns]);
 
   return (
-    <div className={`drx-replay-app ${isFullscreen ? 'fullscreen' : ''}`}>
-      {fullscreenError && <div role="alert">{fullscreenError}</div>}
-      {/* ---------------- Top Replay Dashboard Banner ---------------- */}
+    <div className="drx-replay-app">
       <TopReplayBanner
-        sessionName={summary.name || selectedSessionId || '无会话'}
-        sessions={sessions}
-        selectedSessionId={selectedSessionId}
-        onSelectSession={setSelectedSessionId}
-        currentAction={currentAction}
-        currentStep={currentStep}
-        totalSteps={totalSteps}
-        stages={stages}
-        actions={actions}
-        activeStageKey={currentAction.stageKey || null}
-        disabled={sessionsLoading || graphLoading || !actions.length || Boolean(loadError)}
-        isPlaying={isPlaying}
-        onTogglePlay={setIsPlaying}
-        speed={speed}
-        onSetSpeed={setSpeed}
-        isLoop={isLoop}
-        onToggleLoop={() => setIsLoop(!isLoop)}
-        onReset={() => {
-          setCurrentStep(0);
-          setIsPlaying(false);
-        }}
-        onStepChange={setCurrentStep}
-        isFullscreen={isFullscreen}
-        onToggleFullscreen={handleToggleFullscreen}
+        sessionName={summary.name ?? sessions.find((item) => item.id === selectedSessionId)?.name ?? selectedSessionId}
+        sessions={sessions} selectedSessionId={selectedSessionId} onSelectSession={onSelectSession}
+        currentAction={currentAction} currentStep={currentStep} totalSteps={actions.length}
+        stages={stages} activeStageKey={currentAction?.stageKey} disabled={disabled} loading={loading}
+        isPlaying={isPlaying && !disabled} onTogglePlay={togglePlay} speed={speed} onSetSpeed={setSpeed}
+        isLoop={isLoop} onToggleLoop={() => setIsLoop((value) => !value)}
+        onReset={() => { selectStep(0); setFollow(true); }} onStepChange={selectStep}
+        isFullscreen={isFullscreen} onToggleFullscreen={toggleFullscreen}
       />
-
-      {/* ---------------- Main Content: Flow Canvas + Action Stream ---------------- */}
-      <div className="replay-workspace">
-        {/* React Flow Graph Area */}
-        <div className="flow-canvas-container">
-          {/* Canvas Subtitle & Legend Overlay */}
-          <div className="canvas-header-overlay">
-            <div className="canvas-title-row">
-              <span className="canvas-title">研判成果图谱</span>
-              <span className="canvas-subtitle-hint">
-                节点随真实进度点亮 · 未执行阶段保持灰态 · 联动 · 深度推理 · 多轮假设推演
-              </span>
+      {fullscreenError && <div className="app-notice" role="alert">{fullscreenError}</div>}
+      {loading || error || !selectedSessionId ? (
+        <div className="workspace-empty" role={error ? 'alert' : 'status'}>
+          <p>{loading ? '正在加载会话…' : error || '无会话'}</p>
+          {!loading && <button className="ctrl-btn secondary" onClick={listError || !selectedSessionId ? onRetryList : () => setRetry((value) => value + 1)}>重新加载</button>}
+        </div>
+      ) : (
+        <div className="replay-workspace">
+          <section className="flow-canvas-container" aria-label="会话记录图">
+            <div className="canvas-toolbar">
+              <div><strong>会话记录图</strong><span className="canvas-explanation">连线表示记录顺序 · 已展示 {projected.nodes.length}/{actions.length}</span></div>
+              <div className="canvas-actions">
+                <button disabled={disabled} aria-pressed={follow} onClick={() => setFollow((value) => !value)}>跟随当前{follow ? '：开' : '：关'}</button>
+                <button disabled={disabled} onClick={locateCurrent}>定位当前</button>
+                <button disabled={disabled} onClick={() => { setFollow(false); flow?.fitView({ padding: 0.15, duration: 250 }); }}>查看全图</button>
+                <button aria-expanded={sidebarVisible} aria-controls="session-sidebar" onClick={() => setSidebarVisible((value) => !value)}>{sidebarVisible ? '收起详情' : '显示详情'}</button>
+              </div>
             </div>
-
-            <div className="canvas-legend-row">
-              <span className="legend-item">
-                <span className="legend-dot green" />
-                <span>分区</span>
-              </span>
-              <span className="legend-item">
-                <span className="legend-dot cyan" />
-                <span>已证实</span>
-              </span>
-              <span className="legend-item">
-                <span className="legend-dot purple" />
-                <span>过程</span>
-              </span>
-              <span className="legend-item">
-                <span className="legend-dot red" />
-                <span>已打通</span>
-              </span>
-              <span className="legend-item">
-                <span className="legend-dot gray" />
-                <span>探索中</span>
-              </span>
+            <div className="graph-surface" ref={canvasRef}>
+              {!actions.length ? <div className="workspace-empty">无动作记录</div> : (
+                <ReactFlow
+                  nodes={projected.nodes} edges={projected.edges} nodeTypes={nodeTypes}
+                  onInit={setFlow} onNodesChange={onNodesChange}
+                  onMoveStart={(event) => { if (event) setFollow(false); }}
+                  onNodeClick={(_event, node) => {
+                    selectStep(node.data.step);
+                    setSidebarVisible(true);
+                    setDetailRequestId((value) => value + 1);
+                  }}
+                  nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null}
+                  onlyRenderVisibleElements minZoom={0.2} maxZoom={2}
+                  proOptions={{ hideAttribution: true }}
+                >
+                  <Background color="#203041" gap={24} size={1} />
+                  <Controls showFitView={false} showInteractive={false} />
+                  <MiniMap nodeColor={(node) => node.data.color ?? '#4897ad'} pannable zoomable />
+                </ReactFlow>
+              )}
             </div>
-          </div>
-
-          {sessionsLoading || graphLoading ? (
-            <div className="loading-container">
-              <div className="cyber-spinner" />
-              <div className="loading-text">正在加载研判会话图谱...</div>
+          </section>
+          {sidebarVisible && (
+            <div className="workspace-sidebar" id="session-sidebar">
+              <ActionStream actions={actions} currentStep={currentStep} onSelectStep={selectStep}
+                selectedAction={currentAction} detailRequestId={detailRequestId} summary={summary} />
             </div>
-          ) : loadError ? (
-            <div className="loading-container" role="alert">
-              <p>{loadError}</p>
-              <button onClick={() => setRetry((value) => value + 1)}>重新加载</button>
-            </div>
-          ) : !selectedSessionId || !actions.length ? (
-            <div className="loading-container">{selectedSessionId ? '无动作记录' : '无会话'}</div>
-          ) : (
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              nodeTypes={nodeTypes}
-              onNodeClick={onNodeClick}
-              fitView
-              fitViewOptions={{ padding: 0.15, minZoom: 0.35, maxZoom: 1.15 }}
-              proOptions={{ hideAttribution: true }}
-              minZoom={0.2}
-              maxZoom={2.5}
-            >
-              <Background color="#10192d" gap={32} size={1} />
-              <Controls
-                style={{
-                  background: '#0d1527',
-                  border: '1px solid rgba(56, 189, 248, 0.25)',
-                  borderRadius: 8,
-                }}
-              />
-              <MiniMap
-                nodeColor={(n) => n.data?.color || '#38bdf8'}
-                maskColor="rgba(8, 12, 20, 0.85)"
-                style={{
-                  background: '#0a0f1d',
-                  border: '1px solid rgba(56, 189, 248, 0.2)',
-                  borderRadius: 8,
-                }}
-              />
-            </ReactFlow>
           )}
         </div>
-
-        {/* Action Stream & Detail Panel */}
-        <ActionStream
-          actions={actions}
-          currentStep={currentStep}
-          onSelectStep={(step) => {
-            setCurrentStep(step);
-            setSelectedNode(null);
-          }}
-          selectedNode={selectedNode}
-          summary={summary}
-        />
-      </div>
+      )}
     </div>
   );
 }
