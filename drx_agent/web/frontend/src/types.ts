@@ -1,3 +1,4 @@
+import type { SemanticGraph } from './semanticTypes.ts';
 import type { Edge, Node, Position, XYPosition } from '@xyflow/react';
 
 export interface SessionListItem {
@@ -81,6 +82,7 @@ export type NodePositions = Record<string, XYPosition>;
 export type NodeMeasurements = Record<string, { width: number; height: number }>;
 
 export interface GraphResponse {
+  graphs: { execution: SemanticGraph; causal: SemanticGraph } | null;
   nodes: ReplayNode[];
   edges: ReplayEdge[];
   actions: ReplayAction[];

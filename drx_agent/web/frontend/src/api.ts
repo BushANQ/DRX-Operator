@@ -1,3 +1,4 @@
+import type { SemanticGraph, SemanticNode, SemanticEdge } from './semanticTypes.ts';
 import type {
   GraphResponse, ReplayAction, ReplayEdge, ReplayNode, ReplayStage,
   SessionListItem, SessionSummary,
@@ -175,6 +176,33 @@ function parseSummary(value: unknown, sessionId: string): SessionSummary {
   };
 }
 
+export function parseSemanticGraph(value: unknown, actions: ReplayAction[]): SemanticGraph {
+  const input = record(value, 'semanticGraph');
+  const nodes = list(input.nodes, 'semanticGraph.nodes').map((entry): SemanticNode => {
+    const node = record(entry, 'semanticNode');
+    return { id: string(node.id, 'semanticNode.id'), label: string(node.label, 'semanticNode.label'),
+      kind: string(node.kind, 'semanticNode.kind'), status: nullableString(node.status, 'semanticNode.status'),
+      actionId: nullableString(node.actionId, 'semanticNode.actionId'),
+      step: node.step === null ? null : count(node.step, 'semanticNode.step'), source: record(node.source, 'semanticNode.source') };
+  });
+  const edges = list(input.edges, 'semanticGraph.edges').map((entry): SemanticEdge => {
+    const edge = record(entry, 'semanticEdge');
+    return { id: string(edge.id, 'semanticEdge.id'), source: string(edge.source, 'semanticEdge.source'),
+      target: string(edge.target, 'semanticEdge.target'), relation: string(edge.relation, 'semanticEdge.relation'),
+      label: string(edge.label, 'semanticEdge.label'), sourceInfo: record(edge.sourceInfo, 'semanticEdge.sourceInfo') };
+  });
+  const ids = new Set(nodes.map((node) => node.id));
+  const actionsById = new Map(actions.map((action) => [action.id, action]));
+  if (ids.size !== nodes.length || nodes.some((node) => !node.id || !node.kind)
+    || new Set(edges.map((edge) => edge.id)).size !== edges.length) return invalid('语义图标识重复或缺失');
+  for (const node of nodes) {
+    if (node.step !== null && node.step >= actions.length) return invalid('语义节点时间位置无效');
+    if (node.actionId !== null && (!actionsById.has(node.actionId) || actionsById.get(node.actionId)?.step !== node.step)) return invalid('语义节点动作归属无效');
+  }
+  if (edges.some((edge) => !edge.id || !edge.relation || !ids.has(edge.source) || !ids.has(edge.target))) return invalid('语义图连线无效');
+  return { nodes, edges };
+}
+
 export function parseSessionGraph(value: unknown, sessionId: string): GraphResponse {
   const item = record(value, 'graph');
   const nodes = list(item.nodes, 'nodes').map(parseNode);
@@ -210,5 +238,10 @@ export function parseSessionGraph(value: unknown, sessionId: string): GraphRespo
   if (actions.some((action) => action.stageKey !== null && !stages.some((stage) => stage.key === action.stageKey))) {
     return invalid('阶段归属无效');
   }
-  return { nodes, edges, actions, timeline, stages, summary };
+  const semantic = item.graphs == null ? null : record(item.graphs, 'graphs');
+  const graphs = semantic ? {
+    execution: parseSemanticGraph(semantic.execution, actions),
+    causal: parseSemanticGraph(semantic.causal, actions),
+  } : null;
+  return { nodes, edges, actions, timeline, stages, summary, graphs };
 }

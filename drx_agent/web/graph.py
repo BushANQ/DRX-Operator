@@ -13,6 +13,8 @@ import json
 import math
 from urllib.parse import urlsplit
 
+from drx_agent.web.semantic_graph import build_semantic_graphs
+
 
 class SessionFormatError(ValueError):
     """A saved session cannot be represented without discarding malformed data."""
@@ -370,4 +372,5 @@ def session_to_graph(raw):
         "credsCount": len(credentials), "targets": targets, "findings": findings, "creds": credentials,
     }
     return {"nodes": nodes, "edges": edges, "actions": actions, "timeline": actions,
-            "stages": list(stages.values()), "summary": summary}
+            "stages": list(stages.values()), "summary": summary,
+            "graphs": build_semantic_graphs(raw, actions)}

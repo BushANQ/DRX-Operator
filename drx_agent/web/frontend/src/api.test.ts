@@ -43,7 +43,7 @@ function graphFixture(): GraphResponse {
       id: 'event-0', type: 'eventNode', position: { x: 0, y: 0 },
       data: { actionId: 'event-0', step: 0, title: '工具记录', subtitle: 'tool', status: null, color: '#06b6d4' },
     }],
-    edges: [], actions: [action], timeline: [action], stages: [],
+    edges: [], actions: [action], timeline: [action], stages: [], graphs: null,
     summary: {
       sessionId: 'test', name: null, createdAt: null, targetHost: null, targetUrl: null,
       targetNotes: null, totalActions: 1, totalStages: 0, targetsCount: 0,
