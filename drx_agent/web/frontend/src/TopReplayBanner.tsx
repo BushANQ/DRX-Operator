@@ -2,7 +2,7 @@ import { ArrowClockwise, ArrowsIn, ArrowsOut, ChartBar, Graph, Sidebar, Terminal
 
 interface HeaderProps {
   sessionName: string | null;
-  sessionCount: number;
+  sessionCount: number | null;
   sessionsVisible: boolean;
   activityVisible: boolean;
   view: 'stream' | 'findings';
@@ -28,7 +28,7 @@ export default function TopReplayBanner({ sessionName, sessionCount, sessionsVis
       </nav>
       <div className="header-session" title={sessionName ?? '无会话'}><span className="header-session-caption">当前会话</span><span>{sessionName ?? '无会话'}</span></div>
       <div className="workspace-header-actions">
-        <span className="header-records">{sessionCount} 个会话</span>
+        <span className="header-records">{sessionCount == null ? '会话列表未读取' : `${sessionCount} 个会话`}</span>
         <button className="header-button" disabled={loading} onClick={onRefresh} aria-label="刷新会话"><ArrowClockwise size={16} className={loading ? 'is-spinning' : ''} /><span>刷新</span></button>
         <button className={`icon-button ${activityVisible ? 'is-active' : ''}`} aria-label={activityVisible ? '收起事件日志' : '展开事件日志'} aria-expanded={activityVisible} onClick={onToggleActivity}><Terminal size={18} /></button>
         <button className="icon-button" aria-label={isFullscreen ? '退出全屏' : '全屏'} onClick={onToggleFullscreen}>{isFullscreen ? <ArrowsIn size={18} /> : <ArrowsOut size={18} />}</button>

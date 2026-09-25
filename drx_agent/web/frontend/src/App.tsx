@@ -205,7 +205,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
 
   return (
     <div className="drx-replay-app">
-      <TopReplayBanner sessionName={sessionName} sessionCount={sessions.length}
+      <TopReplayBanner sessionName={listStatus === 'loading' ? '正在读取' : listError ? '列表未加载' : sessionName} sessionCount={listStatus === 'ready' ? sessions.length : null}
         sessionsVisible={sessionsVisible} activityVisible={sidebarVisible} view={panelView} loading={loading}
         isFullscreen={isFullscreen} onToggleSessions={() => setSessionsVisible((value) => !value)}
         onToggleActivity={() => setSidebarVisible((value) => !value)} onViewChange={changeView}
@@ -234,7 +234,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
               </ReactFlow>
             )}
           </div>
-          <div className="canvas-context"><span>会话记录图</span><span>记录顺序</span><span>{projected.nodes.length} / {actions.length}</span></div>
+          <div className="canvas-context"><span>会话记录图</span><span>记录顺序</span><span>{loading || error ? '未读取' : `${projected.nodes.length} / ${actions.length}`}</span></div>
           {!loading && !error && <div className={`canvas-playback-state ${isPlaying ? 'is-playing' : ''}`} aria-live="polite">{isPlaying ? <Play size={13} weight="fill" /> : <Pause size={13} />}<span>{playbackLabel}</span></div>}
           <div className="graph-tools" role="group" aria-label="图谱操作">
             <button className="icon-button" disabled={disabled} aria-label="放大图谱" title="放大" onClick={() => { setFollow(false); void flow?.zoomIn({ duration: 160 }); }}><Plus size={17} /></button>
@@ -250,6 +250,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
           {!mapVisible && <div className="graph-legend" aria-label="记录状态图例"><span>状态图例</span><span><Circle size={8} weight="fill" className="legend-complete" />已完成</span><span><Circle size={8} weight="fill" className="legend-running" />进行中</span><span><Circle size={8} weight="fill" className="legend-error" />失败 / 拒绝</span><span><Circle size={8} weight="fill" className="legend-unknown" />无状态记录</span></div>}
           {inspectorOpen && currentAction && !loading && !error && <NodeInspector action={currentAction} sessionId={summary.sessionId} onClose={closeInspector} />}
           <ReplayDock currentAction={currentAction} currentStep={currentStep} totalSteps={actions.length} stages={stages}
+            pendingLabel={loading ? '正在读取记录…' : error ? '记录未加载' : null}
             isPlaying={isPlaying && !disabled} speed={speed} isLoop={isLoop} disabled={disabled}
             onTogglePlay={togglePlay} onSetSpeed={setSpeed} onToggleLoop={() => setIsLoop((value) => !value)}
             onReset={() => { selectStep(0); setFollow(true); }} onStepChange={selectStep} />
