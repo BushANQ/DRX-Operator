@@ -24,7 +24,11 @@ const EventNode = memo(({ data, selected }) => {
         {isCurrent && <span className="rf-pulse-ring" aria-label="当前回放记录" />}
       </div>
       <div className="rf-card-title" title={title}>{title}</div>
-      <div className="rf-card-subtitle" title={display(data.subtitle)}>{display(data.subtitle)}</div>
+      <div className="rf-card-subtitle" title={display(data.subtitle)}>
+        <span>{display(data.subtitle)}</span>
+        <button className="rf-node-open nodrag" type="button" aria-label={`查看记录 ${data.step + 1} 详情`}
+          onClick={(event) => { event.stopPropagation(); data.onOpen?.(); }}>详情</button>
+      </div>
       <Handle type="source" position={data.sourceSide || Position.Bottom} style={{ background: color }} />
     </div>
   );

@@ -56,7 +56,19 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const error = listError || session.error;
   const disabled = loading || Boolean(error) || !actions.length;
   const hasActions = actions.length > 0;
-  const projected = useMemo(() => projectReplay(graph, currentStep, canvasWidth, positions, measurements), [graph, currentStep, canvasWidth, positions, measurements]);
+  const openNode = useCallback((value) => {
+    setStep(value);
+    setIsPlaying(false);
+    setSidebarVisible(true);
+    setDetailRequestId((old) => old + 1);
+  }, []);
+  const projected = useMemo(() => {
+    const projection = projectReplay(graph, currentStep, canvasWidth, positions, measurements);
+    return { ...projection, nodes: projection.nodes.map((node) => ({
+      ...node, focusable: false,
+      data: { ...node.data, onOpen: () => openNode(node.data.step) },
+    })) };
+  }, [graph, currentStep, canvasWidth, positions, measurements, openNode]);
   const focusNode = projected.nodes.find((node) => node.id === currentAction?.cardId);
 
   useEffect(() => {
@@ -189,11 +201,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
                   nodes={projected.nodes} edges={projected.edges} nodeTypes={nodeTypes}
                   onInit={setFlow} onNodesChange={onNodesChange}
                   onMoveStart={(event) => { if (event) setFollow(false); }}
-                  onNodeClick={(_event, node) => {
-                    selectStep(node.data.step);
-                    setSidebarVisible(true);
-                    setDetailRequestId((value) => value + 1);
-                  }}
+                  onNodeClick={(_event, node) => openNode(node.data.step)}
                   nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null}
                   onlyRenderVisibleElements minZoom={0.001} maxZoom={2}
                   proOptions={{ hideAttribution: true }}
