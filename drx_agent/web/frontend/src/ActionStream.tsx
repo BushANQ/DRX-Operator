@@ -1,19 +1,23 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowSquareOut, Crosshair, ListBullets, Stack, TerminalWindow } from '@phosphor-icons/react';
+import { RawRecord } from './RecordDetails.tsx';
 import type { ReplayAction, SessionSummary } from './types.ts';
 
-type ViewTab = 'stream' | 'detail' | 'findings';
+export type StreamView = 'stream' | 'findings';
+
 interface ActionStreamProps {
-  actions?: ReplayAction[]; currentStep?: number; onSelectStep: (step: number) => void;
-  selectedAction?: ReplayAction | null; detailRequestId?: number; summary: SessionSummary;
+  actions: ReplayAction[];
+  currentStep: number;
+  onSelectStep: (step: number) => void;
+  summary: SessionSummary;
+  view: StreamView;
+  onViewChange: (view: StreamView) => void;
+  onOpenAction: (step: number) => void;
 }
 
-function hasValue(value: unknown) {
-  return value != null && value !== '';
-}
-
-function display(value: unknown) {
-  if (!hasValue(value)) return '无';
-  if (typeof value === 'object' && value !== null) return Object.keys(value).length ? JSON.stringify(value, null, 2) : '无';
+function display(value: unknown): string {
+  if (value == null || value === '') return '无';
+  if (typeof value === 'object') return Object.keys(value).length ? JSON.stringify(value, null, 2) : '无';
   return String(value);
 }
 
@@ -21,7 +25,7 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function findingConfirmation(finding: Record<string, unknown>) {
+function findingConfirmation(finding: Record<string, unknown>): string {
   if (finding.status === 'retracted') return '已撤回';
   if (finding.superseded_by) return '已被后续记录替代';
   if (finding.verified === true || finding.status === 'confirmed' || finding.status === 'exploited') return '已证实';
@@ -33,139 +37,129 @@ function CountCard({ value, label }: { value: unknown; label: string }) {
   return <div className="stat-card"><div className="stat-num">{display(value)}</div><div className="stat-label">{label}</div></div>;
 }
 
-function RecordDetails({ value, label }: { value: unknown; label: string }) {
-  return (
-    <details className="record-source-details">
-      <summary>完整{label}记录</summary>
-      <pre className="detail-code-pre">{display(value)}</pre>
-    </details>
-  );
-}
-
 export default function ActionStream({
-  actions = [],
-  currentStep = 0,
+  actions,
+  currentStep,
   onSelectStep,
-  selectedAction = null,
-  detailRequestId = 0,
   summary,
+  view,
+  onViewChange,
+  onOpenAction,
 }: ActionStreamProps) {
-  const [tabSelection, setTabSelection] = useState<{ tab: ViewTab; requestId: number }>({ tab: 'stream', requestId: 0 });
-  const [copyFeedback, setCopyFeedback] = useState<{ actionId: string | undefined; sessionId: string; message: string } | null>(null);
-  const activeItemRef = useRef<HTMLButtonElement>(null);
-  const detailBodyRef = useRef<HTMLDivElement>(null);
-  const currentAction = selectedAction ?? actions[currentStep] ?? null;
-  const activeTab = detailRequestId > 0 && detailRequestId !== tabSelection.requestId ? 'detail' : tabSelection.tab;
-  const copyStatus = copyFeedback?.actionId === currentAction?.id && copyFeedback?.sessionId === summary.sessionId ? copyFeedback?.message : '';
+  const [followPreference, setFollowPreference] = useState({ sessionId: summary.sessionId, enabled: true });
+  const listRef = useRef<HTMLDivElement>(null);
+  const activeItemRef = useRef<HTMLElement>(null);
+  const lastScrollTop = useRef(0);
+  const lastCursor = useRef<{ sessionId: string; step: number } | null>(null);
+  const following = followPreference.sessionId !== summary.sessionId || followPreference.enabled;
+  const displayedStep = actions.length ? Math.max(0, Math.min(currentStep + 1, actions.length)) : 0;
   const targets = Array.isArray(summary.targets) ? summary.targets : [];
   const findings = Array.isArray(summary.findings) ? summary.findings : [];
   const creds = Array.isArray(summary.creds) ? summary.creds : [];
-  const displayedStep = actions.length ? Math.min(currentStep + 1, actions.length) : 0;
 
-  function setActiveTab(tab: ViewTab) {
-    setTabSelection({ tab, requestId: detailRequestId });
-  }
-
-  useEffect(() => {
-    if (activeTab === 'stream') activeItemRef.current?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
-  }, [currentStep, activeTab]);
-
-  useEffect(() => {
-    if (detailBodyRef.current) detailBodyRef.current.scrollTop = 0;
-  }, [currentAction?.id, summary.sessionId]);
-
-  async function handleCopy(value: unknown) {
-    try {
-      await navigator.clipboard.writeText(display(value));
-      setCopyFeedback({ actionId: currentAction?.id, sessionId: summary.sessionId, message: '已复制' });
-    } catch {
-      setCopyFeedback({ actionId: currentAction?.id, sessionId: summary.sessionId, message: '复制失败，请选择文本手动复制' });
+  const scrollToCurrent = useCallback(() => {
+    const container = listRef.current;
+    const activeItem = activeItemRef.current;
+    if (!container || !activeItem) return;
+    const frame = container.getBoundingClientRect();
+    const item = activeItem.getBoundingClientRect();
+    if (item.top < frame.top || item.height > frame.height) {
+      container.scrollTop += item.top - frame.top;
+    } else if (item.bottom > frame.bottom) {
+      container.scrollTop += item.bottom - frame.bottom;
     }
+    lastScrollTop.current = container.scrollTop;
+  }, []);
+
+  useEffect(() => {
+    const previous = lastCursor.current;
+    const changed = previous?.sessionId !== summary.sessionId || previous.step !== currentStep;
+    lastCursor.current = { sessionId: summary.sessionId, step: currentStep };
+    if (previous?.sessionId !== summary.sessionId) lastScrollTop.current = 0;
+    if (changed && following && view === 'stream') scrollToCurrent();
+  }, [currentStep, summary.sessionId, following, view, scrollToCurrent]);
+
+  function stopFollowing(): void {
+    if (following) setFollowPreference({ sessionId: summary.sessionId, enabled: false });
   }
 
-  function dataBlock(label: string, value: unknown, output = false) {
-    return (
-      <section className="detail-block">
-        <div className="detail-block-header">
-          <span className="detail-block-title">{label}</span>
-          {hasValue(value) && <button type="button" className="detail-copy-btn" onClick={() => handleCopy(value)} aria-label={`复制${label}`}>复制</button>}
-        </div>
-        <pre className={`detail-code-pre ${output ? 'output-pre' : ''}`}><code>{display(value)}</code></pre>
-      </section>
-    );
+  function resumeFollowing(): void {
+    setFollowPreference({ sessionId: summary.sessionId, enabled: true });
+    scrollToCurrent();
   }
 
   return (
-    <aside className="action-stream-panel" aria-label="会话记录和详情">
+    <aside className="action-stream-panel" aria-label="会话事件日志和汇总">
+      <div className="stream-panel-heading">
+        <div className="stream-heading-label"><TerminalWindow size={17} aria-hidden="true" /><h2>事件日志</h2></div>
+        <span className="stream-action-tally" aria-label={`已回放 ${displayedStep} 条，共 ${actions.length} 条`}>{displayedStep}<span> / {actions.length}</span></span>
+      </div>
       <div className="stream-tabs-header" role="group" aria-label="记录视图">
-        <button type="button" className={`stream-tab-btn ${activeTab === 'stream' ? 'active' : ''}`} aria-pressed={activeTab === 'stream'} onClick={() => setActiveTab('stream')}>
-          <span className="tab-label">动作流</span><span className="tab-count-badge">{displayedStep}/{actions.length}</span>
+        <button type="button" className={`stream-tab-btn${view === 'stream' ? ' active' : ''}`} aria-pressed={view === 'stream'} onClick={() => onViewChange('stream')}>
+          <ListBullets size={15} aria-hidden="true" /><span className="tab-label">日志</span>
         </button>
-        <button type="button" className={`stream-tab-btn ${activeTab === 'detail' ? 'active' : ''}`} aria-pressed={activeTab === 'detail'} onClick={() => setActiveTab('detail')}>
-          <span className="tab-label">详细信息</span>
-        </button>
-        <button type="button" className={`stream-tab-btn ${activeTab === 'findings' ? 'active' : ''}`} aria-pressed={activeTab === 'findings'} onClick={() => setActiveTab('findings')}>
-          <span className="tab-label">会话汇总</span>
+        <button type="button" className={`stream-tab-btn${view === 'findings' ? ' active' : ''}`} aria-pressed={view === 'findings'} onClick={() => onViewChange('findings')}>
+          <Stack size={15} aria-hidden="true" /><span className="tab-label">汇总</span>
         </button>
       </div>
 
-      {activeTab === 'stream' && (
+      {view === 'stream' && (
         <div className="action-stream-body">
-          <div className="action-stream-meta-bar"><span>动作流</span><span className="stream-action-tally">{displayedStep}/{actions.length} 条记录</span></div>
-          <div className="action-items-list">
+          <div className="action-stream-meta-bar">
+            <span>已回放 {displayedStep} 条 · 全部 {actions.length} 条</span>
+            <button type="button" className={`stream-follow-btn${following ? ' active' : ''}`} aria-pressed={following} disabled={actions.length === 0} onClick={following ? stopFollowing : resumeFollowing}>
+              <Crosshair size={13} aria-hidden="true" /><span>{following ? '跟随中' : '跟随当前'}</span>
+            </button>
+          </div>
+          <div
+            className="action-items-list"
+            ref={listRef}
+            tabIndex={0}
+            role="region"
+            aria-label="完整事件日志"
+            onWheel={(event) => { if (event.deltaY < 0) stopFollowing(); }}
+            onScroll={(event) => {
+              const top = event.currentTarget.scrollTop;
+              if (top < lastScrollTop.current - 1) stopFollowing();
+              lastScrollTop.current = top;
+            }}
+            onKeyDown={(event) => { if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) stopFollowing(); }}
+          >
             {actions.length === 0 && <p className="empty-state">动作记录：无</p>}
             {actions.map((action, index) => {
               const isActive = index === currentStep;
+              const preview = action.text || action.thought || action.output || action.input;
               return (
-                <button
-                  type="button"
-                  key={action.id ?? index}
+                <article
+                  key={`${summary.sessionId}:${action.id ?? index}`}
                   ref={isActive ? activeItemRef : null}
-                  className={`action-stream-item ${isActive ? 'active-item' : ''}`}
+                  className={`action-stream-item${isActive ? ' active-item' : ''}${index > currentStep ? ' upcoming-item' : ''}`}
+                  style={{ borderLeftColor: action.categoryColor || '#94a3b8' }}
                   aria-current={isActive ? 'step' : undefined}
-                  aria-label={`第 ${index + 1} 条：${display(action.title)}，查看详情`}
-                  onClick={() => { onSelectStep(index); setActiveTab('detail'); }}
                 >
-                  <span className="action-item-time">{display(action.timeOffset)}</span>
-                  <span className="action-category-badge" style={{ color: action.categoryColor || '#94a3b8' }}>{display(action.category || action.kind)}</span>
-                  <span className="action-item-title" title={display(action.title)}>{display(action.title)}</span>
-                </button>
+                  <button
+                    type="button"
+                    className="action-item-open"
+                    aria-label={`第 ${index + 1} 条：${display(action.title)}，查看详情`}
+                    onClick={() => { onSelectStep(index); onOpenAction(index); }}
+                  >
+                    <span className="action-item-meta">
+                      <span className="action-category-badge" style={{ color: action.categoryColor || '#94a3b8' }}>{display(action.category || action.kind)}</span>
+                      <span className="action-item-time">{display(action.timeOffset)}</span>
+                    </span>
+                    <span className="action-item-title">{display(action.title)}</span>
+                    <span className="action-item-preview">{display(preview)}</span>
+                    <span className="action-item-footer"><span>#{index + 1} · {isActive ? '当前记录' : index > currentStep ? '未回放' : '已回放'}</span><ArrowSquareOut size={13} aria-hidden="true" /></span>
+                  </button>
+                  <RawRecord value={action.data} label="事件" />
+                </article>
               );
             })}
           </div>
         </div>
       )}
 
-      {activeTab === 'detail' && (
-        <div className="detail-panel-body" ref={detailBodyRef}>
-          {!currentAction ? <p className="empty-state">详细信息：无</p> : (
-            <>
-              <div className="detail-meta-card">
-                <div className="detail-meta-top">
-                  <span className="detail-category-pill" style={{ color: currentAction.categoryColor || '#94a3b8' }}>{display(currentAction.category || currentAction.kind)}</span>
-                  <span className="detail-stage-pill">阶段：{display(currentAction.stageTitle || currentAction.stageKey)}</span>
-                  <span className="detail-time-stamp">时间：{display(currentAction.timeOffset)}</span>
-                </div>
-                <div className="detail-title-large">{display(currentAction.title)}</div>
-                <dl className="detail-metadata-list">
-                  <div><dt>执行者</dt><dd>{display(currentAction.actor)}</dd></div>
-                  <div><dt>消息角色</dt><dd>{display(currentAction.role)}</dd></div>
-                  <div><dt>工具</dt><dd>{display(currentAction.tool)}</dd></div>
-                  <div><dt>状态</dt><dd>{display(currentAction.status)}</dd></div>
-                </dl>
-              </div>
-              {hasValue(currentAction.text) && dataBlock('消息内容', currentAction.text)}
-              {hasValue(currentAction.thought) && currentAction.thought !== currentAction.text && dataBlock('记录中的推理内容', currentAction.thought)}
-              {dataBlock('输入参数', hasValue(currentAction.fullInput) ? currentAction.fullInput : currentAction.input)}
-              {dataBlock('输出结果', hasValue(currentAction.fullOutput) ? currentAction.fullOutput : currentAction.output, true)}
-              {hasValue(currentAction.data) && <RecordDetails value={currentAction.data} label="事件" />}
-              <p className="copy-feedback" role="status">{copyStatus}</p>
-            </>
-          )}
-        </div>
-      )}
-
-      {activeTab === 'findings' && (
+      {view === 'findings' && (
         <div className="findings-panel-body">
           <div className="findings-stats-grid">
             <CountCard value={summary.targetsCount} label="目标数量" />
@@ -174,7 +168,7 @@ export default function ActionStream({
             <CountCard value={summary.totalActions ?? actions.length} label="动作记录" />
           </div>
           <section className="findings-section">
-            <h3 className="findings-section-title">目标记录</h3>
+            <h3 className="findings-section-title">目标记录 <span>{targets.length}</span></h3>
             {targets.length === 0 ? <p className="empty-state">无</p> : targets.map((value, index) => {
               const target = asRecord(value);
               return (
@@ -183,13 +177,13 @@ export default function ActionStream({
                   <div className="finding-item-content">端口：{display(target.open_ports ?? target.ports)}</div>
                   <div className="finding-item-content">服务：{display(target.services)}</div>
                   <div className="finding-item-content">说明：{display(target.notes ?? target.description)}</div>
-                  <RecordDetails value={value} label="目标" />
+                  <RawRecord value={value} label="目标" />
                 </div>
               );
             })}
           </section>
           <section className="findings-section">
-            <h3 className="findings-section-title">发现记录</h3>
+            <h3 className="findings-section-title">发现记录 <span>{findings.length}</span></h3>
             {findings.length === 0 ? <p className="empty-state">无</p> : findings.map((value, index) => {
               const finding = asRecord(value);
               return (
@@ -199,14 +193,14 @@ export default function ActionStream({
                   <div className="finding-item-content">状态：{display(finding.status)}</div>
                   <div className="finding-item-content">确认状态：{findingConfirmation(finding)}</div>
                   <div className="finding-item-content">说明：{display(finding.description ?? finding.detail)}</div>
-                  <RecordDetails value={value} label="发现" />
+                  <RawRecord value={value} label="发现" />
                 </div>
               );
             })}
           </section>
           <section className="findings-section">
-            <h3 className="findings-section-title">凭据记录（{display(summary.credsCount)}）</h3>
-            {creds.length === 0 ? <p className="empty-state">无</p> : creds.map((value, index) => <RecordDetails key={`${asRecord(value).id ?? 'credential'}-${index}`} value={value} label="凭据" />)}
+            <h3 className="findings-section-title">凭据记录 <span>{display(summary.credsCount)}</span></h3>
+            {creds.length === 0 ? <p className="empty-state">无</p> : creds.map((value, index) => <RawRecord key={`${asRecord(value).id ?? 'credential'}-${index}`} value={value} label="凭据" />)}
           </section>
         </div>
       )}

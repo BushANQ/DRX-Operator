@@ -1,9 +1,13 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { ReactFlow, Background, Controls, MiniMap } from '@xyflow/react';
+import { ReactFlow, Background, MiniMap } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { nodeTypes } from './nodes';
 import TopReplayBanner from './TopReplayBanner';
 import ActionStream from './ActionStream';
+import SessionSidebar from './SessionSidebar.tsx';
+import ReplayDock from './ReplayDock.tsx';
+import NodeInspector from './NodeInspector.tsx';
+import { ArrowClockwise, Circle, CaretLeft, CaretRight, CornersOut, Crosshair, Info, MapTrifold, Minus, Pause, Play, Plus, WarningCircle } from '@phosphor-icons/react';
 import { useSessionList, useSessionGraph } from './useRemoteJSON.ts';
 import type { ReactFlowInstance, NodeChange } from '@xyflow/react';
 import type { GraphResponse, ReplayNode, ReplayEdge, NodePositions, NodeMeasurements, SessionListItem, RemoteStatus } from './types.ts';
@@ -57,7 +61,10 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [isLoop, setIsLoop] = useState(false);
-  const [detailRequestId, setDetailRequestId] = useState(0);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [sessionsVisible, setSessionsVisible] = useState(() => window.innerWidth >= 1100);
+  const [panelView, setPanelView] = useState<'stream' | 'findings'>('stream');
+  const [mapVisible, setMapVisible] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth >= 850);
   const [follow, setFollow] = useState(true);
   const [positions, setPositions] = useState<NodePositions>({});
@@ -75,8 +82,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const openNode = useCallback((value: number) => {
     setStep(value);
     setIsPlaying(false);
-    setSidebarVisible(true);
-    setDetailRequestId((old) => old + 1);
+    setInspectorOpen(true);
   }, []);
   const projected = useMemo(() => {
     const projection = projectReplay(graph, currentStep, canvasWidth, positions, measurements);
@@ -101,8 +107,10 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const locateCurrent = useCallback(() => {
     if (!flow || !focusNode) return;
     const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 250;
-    flow.setCenter(focusNode.position.x + NODE_WIDTH / 2, focusNode.position.y + NODE_HEIGHT / 2, { zoom: 1, duration });
-  }, [flow, focusNode]);
+    const reservedWidth = inspectorOpen && canvasWidth > 620 ? 330 : 0;
+    flow.setViewport({ x: (canvasWidth + reservedWidth) / 2 - focusNode.position.x - NODE_WIDTH / 2,
+      y: Math.max(140, (canvasHeight - 100) / 2) - focusNode.position.y - NODE_HEIGHT / 2, zoom: 1 }, { duration });
+  }, [flow, focusNode, inspectorOpen, canvasWidth, canvasHeight]);
 
   useEffect(() => {
     if (follow) locateCurrent();
@@ -179,62 +187,71 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     setPositions((old) => ({ ...old, ...Object.fromEntries(Object.entries(moved).map(([id, position]) => [`${projected.columns}:${id}`, position])) }));
   }, [projected.columns]);
 
+  const sessionName = summary.name ?? sessions.find((item) => item.id === selectedSessionId)?.name ?? selectedSessionId;
+  const closeInspector = useCallback(() => setInspectorOpen(false), []);
+  const changeView = (view: 'stream' | 'findings') => {
+    setPanelView(view);
+    setSidebarVisible(true);
+    if (view === 'findings') setInspectorOpen(false);
+  };
+  const playbackLabel = !actions.length ? '无回放记录' : isPlaying ? '回放中' : currentStep === actions.length - 1 ? '回放结束' : '回放已暂停';
+
   return (
     <div className="drx-replay-app">
-      <TopReplayBanner
-        sessionName={summary.name ?? sessions.find((item) => item.id === selectedSessionId)?.name ?? selectedSessionId}
-        sessions={sessions} selectedSessionId={selectedSessionId} onSelectSession={onSelectSession}
-        currentAction={currentAction} currentStep={currentStep} totalSteps={actions.length}
-        stages={stages} activeStageKey={currentAction?.stageKey} disabled={disabled} loading={loading}
-        isPlaying={isPlaying && !disabled} onTogglePlay={togglePlay} speed={speed} onSetSpeed={setSpeed}
-        isLoop={isLoop} onToggleLoop={() => setIsLoop((value) => !value)}
-        onReset={() => { selectStep(0); setFollow(true); }} onStepChange={selectStep}
-        isFullscreen={isFullscreen} onToggleFullscreen={toggleFullscreen}
-      />
+      <TopReplayBanner sessionName={sessionName} sessionCount={sessions.length}
+        sessionsVisible={sessionsVisible} activityVisible={sidebarVisible} view={panelView} loading={loading}
+        isFullscreen={isFullscreen} onToggleSessions={() => setSessionsVisible((value) => !value)}
+        onToggleActivity={() => setSidebarVisible((value) => !value)} onViewChange={changeView}
+        onRefresh={onRetryList} onToggleFullscreen={toggleFullscreen} />
       {fullscreenError && <div className="app-notice" role="alert">{fullscreenError}</div>}
-      {loading || error || !selectedSessionId ? (
-        <div className="workspace-empty" role={error ? 'alert' : 'status'}>
-          <p>{loading ? '正在加载会话…' : error || '无会话'}</p>
-          {!loading && <button className="ctrl-btn secondary" onClick={listError || !selectedSessionId ? onRetryList : () => setRetry((value) => value + 1)}>重新加载</button>}
-        </div>
-      ) : (
-        <div className="replay-workspace">
-          <section className="flow-canvas-container" aria-label="会话记录图">
-            <div className="canvas-toolbar">
-              <div><strong>会话记录图</strong><span className="canvas-explanation">连线表示记录顺序 · 已展示 {projected.nodes.length}/{actions.length}</span></div>
-              <div className="canvas-actions">
-                <button disabled={disabled} aria-pressed={follow} onClick={() => setFollow((value) => !value)}>跟随当前{follow ? '：开' : '：关'}</button>
-                <button disabled={disabled} onClick={locateCurrent}>定位当前</button>
-                <button disabled={disabled} onClick={() => { setFollow(false); flow?.fitView({ includeHiddenNodes: true, minZoom: 0.001, padding: 0.15, duration: 250 }); }}>查看全图</button>
-                <button aria-expanded={sidebarVisible} aria-controls="session-sidebar" onClick={() => setSidebarVisible((value) => !value)}>{sidebarVisible ? '收起详情' : '显示详情'}</button>
+      <div className={`workspace-body ${sessionsVisible ? '' : 'sessions-collapsed'} ${sidebarVisible ? '' : 'activity-collapsed'}`}>
+        {sessionsVisible && <SessionSidebar sessions={sessions} selectedSessionId={selectedSessionId} onSelectSession={onSelectSession}
+          loading={listStatus === 'loading'} error={listError} onRefresh={onRetryList} onClose={() => setSessionsVisible(false)} />}
+        <main className="canvas-stage" aria-label="会话记录图">
+          <div className="graph-surface" ref={canvasRef}>
+            {loading || error || !selectedSessionId || !actions.length ? (
+              <div className="workspace-empty" role={error ? 'alert' : 'status'}>
+                {error ? <WarningCircle size={34} /> : loading ? <ArrowClockwise size={30} className="is-spinning" /> : <Info size={34} />}
+                <h2>{loading ? '正在读取会话' : error || (selectedSessionId ? '无动作记录' : '无会话')}</h2>
+                <p>{loading ? '正在加载已保存的数据…' : error ? '原始记录保持不变，请重试或切换会话。' : selectedSessionId ? '此会话没有可回放的动作。' : '已保存的会话会显示在左侧列表。'}</p>
+                {!loading && <button className="header-button" onClick={listError || !selectedSessionId ? onRetryList : () => setRetry((value) => value + 1)}><ArrowClockwise size={15} />重新加载</button>}
               </div>
-            </div>
-            <div className="graph-surface" ref={canvasRef}>
-              {!actions.length ? <div className="workspace-empty">无动作记录</div> : (
-                <ReactFlow<ReplayNode, ReplayEdge>
-                  nodes={projected.nodes} edges={projected.edges} nodeTypes={nodeTypes}
-                  onInit={setFlow} onNodesChange={onNodesChange}
-                  onMoveStart={(event) => { if (event) setFollow(false); }}
-                  onNodeClick={(_event, node) => openNode(node.data.step)}
-                  nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null}
-                  onlyRenderVisibleElements minZoom={0.001} maxZoom={2}
-                  proOptions={{ hideAttribution: true }}
-                >
-                  <Background color="#203041" gap={24} size={1} />
-                  <Controls showFitView={false} showInteractive={false} />
-                  <MiniMap nodeColor={(node) => typeof node.data.color === 'string' ? node.data.color : '#4897ad'} maskColor="rgba(4, 9, 17, 0.72)" pannable zoomable />
-                </ReactFlow>
-              )}
-            </div>
-          </section>
-          {sidebarVisible && (
-            <div className="workspace-sidebar" id="session-sidebar">
-              <ActionStream actions={actions} currentStep={currentStep} onSelectStep={selectStep}
-                selectedAction={currentAction} detailRequestId={detailRequestId} summary={summary} />
-            </div>
-          )}
-        </div>
-      )}
+            ) : (
+              <ReactFlow<ReplayNode, ReplayEdge> nodes={projected.nodes} edges={projected.edges} nodeTypes={nodeTypes}
+                onInit={setFlow} onNodesChange={onNodesChange} onMoveStart={(event) => { if (event) setFollow(false); }}
+                onNodeClick={(_event, node) => openNode(node.data.step)}
+                nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null}
+                onlyRenderVisibleElements minZoom={0.001} maxZoom={2} proOptions={{ hideAttribution: true }}>
+                <Background color="#29384e" gap={24} size={1} />
+                {mapVisible && <MiniMap nodeColor={(node) => typeof node.data.color === 'string' ? node.data.color : '#64748b'} maskColor="rgba(7, 13, 24, 0.8)" pannable zoomable />}
+              </ReactFlow>
+            )}
+          </div>
+          <div className="canvas-context"><span>会话记录图</span><span>记录顺序</span><span>{projected.nodes.length} / {actions.length}</span></div>
+          {!loading && !error && <div className={`canvas-playback-state ${isPlaying ? 'is-playing' : ''}`} aria-live="polite">{isPlaying ? <Play size={13} weight="fill" /> : <Pause size={13} />}<span>{playbackLabel}</span></div>}
+          <div className="graph-tools" role="group" aria-label="图谱操作">
+            <button className="icon-button" disabled={disabled} aria-label="放大图谱" title="放大" onClick={() => { setFollow(false); void flow?.zoomIn({ duration: 160 }); }}><Plus size={17} /></button>
+            <button className="icon-button" disabled={disabled} aria-label="缩小图谱" title="缩小" onClick={() => { setFollow(false); void flow?.zoomOut({ duration: 160 }); }}><Minus size={17} /></button>
+            <button className="icon-button" disabled={disabled} aria-label="查看全图" title="查看全图" onClick={() => { setFollow(false); void flow?.fitView({ includeHiddenNodes: true, minZoom: 0.001, padding: 0.22, duration: 220 }); }}><CornersOut size={18} /></button>
+            <div className="tool-separator" />
+            <button className={`icon-button ${follow ? 'is-active' : ''}`} disabled={disabled} aria-label={follow ? '关闭跟随当前记录' : '跟随当前记录'} aria-pressed={follow} title="跟随当前记录" onClick={() => setFollow((value) => !value)}><Crosshair size={18} /></button>
+            <button className={`icon-button ${mapVisible ? 'is-active' : ''}`} disabled={disabled} aria-label="显示缩略图" aria-pressed={mapVisible} title="缩略图" onClick={() => setMapVisible((value) => !value)}><MapTrifold size={18} /></button>
+          </div>
+          <button className="panel-handle panel-handle-left" aria-label={sessionsVisible ? '收起会话列表' : '展开会话列表'} aria-expanded={sessionsVisible} onClick={() => setSessionsVisible((value) => !value)}>{sessionsVisible ? <CaretLeft size={14} /> : <CaretRight size={14} />}</button>
+          <button className="panel-handle panel-handle-right" aria-label={sidebarVisible ? '收起事件日志' : '展开事件日志'} aria-expanded={sidebarVisible} onClick={() => setSidebarVisible((value) => !value)}>{sidebarVisible ? <CaretRight size={14} /> : <CaretLeft size={14} />}</button>
+          {!mapVisible && <div className="graph-legend" aria-label="记录状态图例"><span>状态图例</span><span><Circle size={8} weight="fill" className="legend-complete" />已完成</span><span><Circle size={8} weight="fill" className="legend-running" />进行中</span><span><Circle size={8} weight="fill" className="legend-error" />失败 / 拒绝</span><span><Circle size={8} weight="fill" className="legend-unknown" />无状态记录</span></div>}
+          {inspectorOpen && currentAction && !loading && !error && <NodeInspector action={currentAction} sessionId={summary.sessionId} onClose={closeInspector} />}
+          <ReplayDock currentAction={currentAction} currentStep={currentStep} totalSteps={actions.length} stages={stages}
+            isPlaying={isPlaying && !disabled} speed={speed} isLoop={isLoop} disabled={disabled}
+            onTogglePlay={togglePlay} onSetSpeed={setSpeed} onToggleLoop={() => setIsLoop((value) => !value)}
+            onReset={() => { selectStep(0); setFollow(true); }} onStepChange={selectStep} />
+        </main>
+        {sidebarVisible && <div className="workspace-activity" id="session-sidebar">
+          {loading || error ? <div className="workspace-empty"><Info size={24} /><p>{loading ? '正在加载记录…' : '会话记录未加载'}</p></div> :
+            <ActionStream actions={actions} currentStep={currentStep} onSelectStep={selectStep} onOpenAction={openNode}
+              summary={summary} view={panelView} onViewChange={setPanelView} />}
+        </div>}
+      </div>
     </div>
   );
 }
