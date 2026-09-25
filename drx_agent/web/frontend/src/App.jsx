@@ -45,6 +45,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth >= 850);
   const [follow, setFollow] = useState(true);
   const [positions, setPositions] = useState({});
+  const [measurements, setMeasurements] = useState({});
   const [flow, setFlow] = useState(null);
   const [canvasWidth, setCanvasWidth] = useState(900);
   const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
@@ -55,7 +56,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const error = listError || session.error;
   const disabled = loading || Boolean(error) || !actions.length;
   const hasActions = actions.length > 0;
-  const projected = useMemo(() => projectReplay(graph, currentStep, canvasWidth, positions), [graph, currentStep, canvasWidth, positions]);
+  const projected = useMemo(() => projectReplay(graph, currentStep, canvasWidth, positions, measurements), [graph, currentStep, canvasWidth, positions, measurements]);
   const focusNode = projected.nodes.find((node) => node.id === currentAction?.cardId);
 
   useEffect(() => {
@@ -133,6 +134,14 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   };
 
   const onNodesChange = useCallback((changes) => {
+    const measured = changes.filter((change) => change.type === 'dimensions' && change.dimensions);
+    if (measured.length) setMeasurements((old) => {
+      const changed = measured.filter(({ id, dimensions }) => old[id]?.width !== dimensions.width || old[id]?.height !== dimensions.height);
+      if (!changed.length) return old;
+      const next = { ...old };
+      for (const change of changed) next[change.id] = change.dimensions;
+      return next;
+    });
     const moved = changes.filter((change) => change.type === 'position' && change.position);
     if (!moved.length) return;
     setFollow(false);

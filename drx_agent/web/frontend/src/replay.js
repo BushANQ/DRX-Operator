@@ -2,7 +2,7 @@ export const NODE_WIDTH = 260;
 export const NODE_HEIGHT = 132;
 
 // Edges describe saved record order, never a proven attack or causal path.
-export function projectReplay(graph, currentStep, canvasWidth, positions = {}) {
+export function projectReplay(graph, currentStep, canvasWidth, positions = {}, measurements = {}) {
   const columns = Math.max(1, Math.min(3, Math.floor((canvasWidth - 32) / 304)));
   const visible = graph.nodes.filter((node) => node.data.step <= currentStep);
   const nodes = visible.map((node) => {
@@ -16,6 +16,7 @@ export function projectReplay(graph, currentStep, canvasWidth, positions = {}) {
       style: { width: NODE_WIDTH, height: NODE_HEIGHT },
       width: NODE_WIDTH,
       height: NODE_HEIGHT,
+      measured: measurements[node.id],
       sourcePosition: offset === columns - 1 ? 'bottom' : row % 2 ? 'left' : 'right',
       targetPosition: offset === 0 ? 'top' : row % 2 ? 'right' : 'left',
       connectable: false,

@@ -30,3 +30,11 @@ test('rewind and forward recompute edge colors from source data', () => {
   late.edges[0].style.stroke = '#1e293b';
   assert.equal(projectReplay(graph, 4, 900).edges[0].style.stroke, '#4897ad');
 });
+
+test('actual node measurements survive replay without inventing measurements for unseen nodes', () => {
+  const measurements = { e0: { width: 260, height: 132 } };
+  const projected = projectReplay(graph, 3, 900, {}, measurements);
+  assert.deepEqual(projected.nodes[0].measured, measurements.e0);
+  assert.equal(projected.nodes[1].measured, undefined);
+  assert.equal(projected.nodes[1].width, 260);
+});
