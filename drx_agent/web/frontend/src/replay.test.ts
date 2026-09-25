@@ -12,7 +12,7 @@ test('overview fits every long-history node above playback controls and beside a
     assert.ok(viewport);
     for (const node of nodes) {
       assert.ok(node.position.x * viewport.zoom + viewport.x >= 350);
-      assert.ok((node.position.x + NODE_WIDTH) * viewport.zoom + viewport.x <= 934);
+      assert.ok((node.position.x + NODE_WIDTH) * viewport.zoom + viewport.x <= 830);
       assert.ok(node.position.y * viewport.zoom + viewport.y >= 70);
       assert.ok((node.position.y + NODE_HEIGHT) * viewport.zoom + viewport.y <= 668);
     }

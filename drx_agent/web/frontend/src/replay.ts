@@ -10,7 +10,7 @@ export function isReplayShortcut(event: KeyboardEvent): boolean {
 export function overviewViewport(nodes: ReadonlyArray<{ position: { x: number; y: number }; width?: number; height?: number }> , width: number, height: number, inspectorOpen = false) {
   if (!nodes.length) return null;
   const left = inspectorOpen && width > 620 ? 350 : 30;
-  const right = 66;
+  const right = width > 620 ? 170 : 66;
   const top = 70;
   const bottom = 112;
   const availableWidth = Math.max(1, width - left - right);
