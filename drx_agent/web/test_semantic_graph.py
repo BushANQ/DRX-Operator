@@ -96,7 +96,7 @@ class SemanticGraphTests(unittest.TestCase):
         ])
         result, actions = project(raw)
         graph = result["execution"]
-        turns = [node for node in graph["nodes"] if node["kind"] == "turn"]
+        turns = [node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls"]
         self.assertEqual(1, len(turns))
         children = [edge for edge in graph["edges"] if edge["source"] == turns[0]["id"]]
         self.assertEqual(2, len(children))
@@ -112,8 +112,98 @@ class SemanticGraphTests(unittest.TestCase):
             ]},
         ])
         graph = project(raw)[0]["execution"]
-        turn = next(node for node in graph["nodes"] if node["kind"] == "turn")
+        turn = next(node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls")
         self.assertEqual(2, len([edge for edge in graph["edges"] if edge["source"] == turn["id"]]))
+
+    def test_empty_assistant_calls_are_named_and_located_by_matched_actions(self):
+        raw = session([message("user", "user", "Request"), tool("one", call_id="c1"), tool("two", call_id="c2")], messages=[
+            {"role": "user", "content": "Request"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "function": {"name": "http_fetch", "arguments": "{}"}},
+                {"id": "c2", "function": {"name": "http_fetch", "arguments": "{}"}},
+            ]},
+        ])
+        graph = project(raw)[0]["execution"]
+        group = next(node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls")
+        self.assertEqual("tool_group", group["kind"])
+        self.assertEqual("工具调用组 · 2项", group["label"])
+        self.assertEqual(1, group["step"])
+        self.assertIsNone(group["actionId"])
+        self.assertEqual("matched_tool_calls", group["source"]["stepSource"]["kind"])
+        self.assertNotIn("replayVisibility", group["source"])
+        self.assertFalse(any("助手回合" in node["label"] for node in graph["nodes"]))
+
+    def test_unmatched_tool_call_group_is_snapshot_only(self):
+        raw = session([], messages=[{"role": "assistant", "content": "", "tool_calls": [
+            {"id": "unmatched", "function": {"name": "http_fetch", "arguments": "{}"}}
+        ]}])
+        graph = project(raw)[0]["execution"]
+        group = next(node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls")
+        self.assertIsNone(group["step"])
+        self.assertEqual("snapshot_only", group["source"]["replayVisibility"])
+
+    def test_null_and_whitespace_toolcall_content_are_groups_with_original_sources(self):
+        for content in (None, "", " \n\t"):
+            with self.subTest(content=content):
+                saved_message = {"role": "assistant", "content": content, "tool_calls": [
+                    {"id": "c1", "function": {"name": "http_fetch", "arguments": "{}"}}
+                ]}
+                raw = session([tool("one", call_id="c1")], messages=[saved_message])
+                group = next(node for node in project(raw)[0]["execution"]["nodes"] if node["kind"] == "tool_group")
+                self.assertEqual(saved_message, group["source"]["record"])
+                self.assertEqual("工具调用组 · 1项", group["label"])
+
+    def test_empty_auxiliary_messages_without_calls_do_not_create_nodes(self):
+        for content in (None, "", " \n\t"):
+            with self.subTest(content=content):
+                raw = session([], messages=[{"role": "assistant", "content": content}])
+                self.assertEqual([], project(raw)[0]["execution"]["nodes"])
+
+    def test_unmatched_auxiliary_message_keeps_source_and_is_snapshot_only(self):
+        saved_message = {"role": "assistant", "content": "Unmatched saved message"}
+        raw = session([], messages=[saved_message])
+        node = next(node for node in project(raw)[0]["execution"]["nodes"] if node["kind"] == "turn")
+        self.assertEqual(saved_message, node["source"]["record"])
+        self.assertIsNone(node["step"])
+        self.assertEqual("snapshot_only", node["source"]["replayVisibility"])
+
+    def test_matched_empty_assistant_action_keeps_tool_group_classification(self):
+        raw = session([message("empty", "assistant", ""), tool("one", call_id="c1")], messages=[
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "http_fetch", "arguments": "{}"}}]}
+        ])
+        graph = project(raw)[0]["execution"]
+        group = next(node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls")
+        self.assertEqual("tool_group", group["kind"])
+        self.assertIsNotNone(group["actionId"])
+        self.assertEqual(0, group["step"])
+
+    def test_host_context_is_not_a_user_request_or_new_conversation_parent(self):
+        context = "【宿主运行状态 — 完整快照，后出现的快照替代先前快照】\nSynthetic context"
+        raw = session([message("user", "user", "Request"), tool("one", call_id="c1")], messages=[
+            {"role": "user", "content": "Request"}, {"role": "user", "content": context},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "http_fetch", "arguments": "{}"}}]},
+        ])
+        graph = project(raw)[0]["execution"]
+        self.assertEqual(1, sum(node["kind"] == "request" for node in graph["nodes"]))
+        host = next(node for node in graph["nodes"] if node["kind"] == "context")
+        request = next(node for node in graph["nodes"] if node["kind"] == "request")
+        group = next(node for node in graph["nodes"] if node["source"].get("origin") == "assistant_tool_calls")
+        self.assertEqual(context, host["source"]["record"]["content"])
+        self.assertEqual("宿主状态快照", host["label"])
+        self.assertEqual("snapshot_only", host["source"]["replayVisibility"])
+        self.assertTrue(any(edge["source"] == request["id"] and edge["target"] == group["id"] for edge in graph["edges"]))
+        self.assertFalse(any(edge["source"] == host["id"] for edge in graph["edges"]))
+
+    def test_legacy_host_context_keeps_its_real_action_position(self):
+        context = "【宿主运行状态 — 完整快照，后出现的快照替代先前快照】\nSynthetic context"
+        raw = session(messages=[{"role": "user", "content": "Request"}, {"role": "user", "content": context},
+                                {"role": "assistant", "content": "Reply"}])
+        graph = project(raw)[0]["execution"]
+        host = next(node for node in graph["nodes"] if node["kind"] == "context")
+        self.assertEqual(1, host["step"])
+        self.assertIsNotNone(host["actionId"])
+        self.assertIsNone(host["status"])
+        self.assertEqual(1, sum(node["kind"] == "request" for node in graph["nodes"]))
 
     def test_different_id_namespaces_use_only_unique_exact_payload_match(self):
         raw = session([tool("trace-one", call_id="internal-id", output="Actual result")], messages=[

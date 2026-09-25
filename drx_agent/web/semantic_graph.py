@@ -49,6 +49,10 @@ def _content(message):
     return ""
 
 
+def _runtime_context(text):
+    return isinstance(text, str) and text.startswith("【宿主运行状态 — 完整快照，后出现的快照替代先前快照】\n")
+
+
 def _message_calls(message):
     calls = [(item.get("id"), item) for item in _items(message.get("tool_calls")) if isinstance(item, dict)]
     calls.extend((block.get("id"), block) for block in _items(message.get("content")) if isinstance(block, dict) and block.get("type") == "tool_use")
@@ -306,8 +310,13 @@ def _execution(raw, actions, extra):
             continue
         text = _content(message)
         calls = _message_calls(message)
-        if not text and not calls:
+        has_text = bool(text.strip())
+        if not has_text and not calls:
             continue
+        context = message["role"] == "user" and _runtime_context(text)
+        tool_group = message["role"] == "assistant" and not has_text and bool(calls)
+        kind = "context" if context else "tool_group" if tool_group else "request" if message["role"] == "user" else "turn"
+        label = "宿主状态快照" if context else f"工具调用组 · {len(calls)}项" if tool_group else text
         matches = [action for action in message_actions[(message.get("role"), text)] if action["id"] not in used_message_actions]
         actor = _string(message.get("agent_id"))
         if actor:
@@ -316,16 +325,22 @@ def _execution(raw, actions, extra):
             match = matches[0]
             used_message_actions.add(match["id"])
             identity = action_nodes[match["id"]]
-            graph.nodes[identity]["kind"] = "request" if message["role"] == "user" else "turn"
+            graph.nodes[identity]["kind"] = kind
             graph.nodes[identity]["source"]["grouping"] = "conversation"
         else:
             identity = _id("execution-message", message.get("id") or index)
-            graph.node(identity, text or f"助手回合 {index + 1} · 记录分组", "request" if message["role"] == "user" else "turn",
-                       {"path": f"messages[{index}]", "record": message, "grouping": "conversation"})
-        if message["role"] == "user":
+            graph.node(identity, label, kind,
+                       {"path": f"messages[{index}]", "record": message, "grouping": "conversation", "replayVisibility": "snapshot_only"})
+        if context:
+            graph.nodes[identity]["source"]["origin"] = "host_runtime_context"
+            graph.nodes[identity]["label"] = label
+        if tool_group:
+            graph.nodes[identity]["label"] = label
+            graph.nodes[identity]["source"]["origin"] = "assistant_tool_calls"
+        if kind == "request":
             current_request = identity
         elif current_request:
-            attach(current_request, identity, "record_group", "对话记录分组", {"path": f"messages[{index}]", "field": "role", "value": "assistant"})
+            attach(current_request, identity, "record_group", "宿主上下文" if context else "对话记录分组", {"path": f"messages[{index}]", "field": "role", "value": message["role"]})
         for call_id, call in calls:
             candidates = call_actions.get(str(call_id), [])
             matching = "tool_call_id"
@@ -345,11 +360,19 @@ def _execution(raw, actions, extra):
         identity = action_nodes[action["id"]]
         actor = action.get("actor")
         if action.get("kind") == "message" and action.get("role") == "user":
-            current_request = identity
-            current_turn = {}
-            graph.nodes[identity]["kind"] = "request"
+            if _runtime_context(action.get("text")):
+                graph.nodes[identity]["kind"] = "context"
+                graph.nodes[identity]["label"] = "宿主状态快照"
+                graph.nodes[identity]["source"]["origin"] = "host_runtime_context"
+                if current_request:
+                    attach(current_request, identity, "record_group", "宿主上下文", {"path": f"actions[{index}]", "field": "role", "value": "user"})
+            else:
+                current_request = identity
+                current_turn = {}
+                graph.nodes[identity]["kind"] = "request"
         elif action.get("kind") == "message" and action.get("role") == "assistant":
-            graph.nodes[identity]["kind"] = "turn"
+            if graph.nodes[identity]["source"].get("origin") != "assistant_tool_calls":
+                graph.nodes[identity]["kind"] = "turn"
             current_turn[actor] = identity
             if current_request:
                 attach(current_request, identity, "record_group", "对话记录分组", {"path": f"actions[{index}]", "field": "role", "value": "assistant"})
@@ -388,7 +411,16 @@ def _execution(raw, actions, extra):
                     else:
                         graph.nodes[identity]["source"].setdefault("unresolvedRelations", []).append({"field": field, "value": value, "reason": "cyclic_dependency"})
     for node in graph.nodes.values():
-        if node["kind"] in {"request", "turn"}:
+        if node["source"].get("origin") == "assistant_tool_calls" and node["actionId"] is None:
+            matched = [graph.nodes[identity] for identity in children.get(node["id"], ())
+                       if graph.nodes[identity]["actionId"] is not None and isinstance(graph.nodes[identity]["step"], int)]
+            matched.sort(key=lambda child: (child["step"], child["actionId"]))
+            if matched:
+                node["step"] = min(child["step"] for child in matched)
+                node["source"].pop("replayVisibility", None)
+                node["source"]["stepSource"] = {"kind": "matched_tool_calls", "actionIds": [child["actionId"] for child in matched],
+                                                "meaning": "记录定位，不代表执行时间"}
+        if node["kind"] in {"request", "turn", "context"} or node["source"].get("origin") == "assistant_tool_calls":
             node["source"]["recordStatus"] = node["status"]
             node["status"] = None
     if graph.nodes:
