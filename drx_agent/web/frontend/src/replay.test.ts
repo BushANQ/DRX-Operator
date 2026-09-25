@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { projectReplay, NODE_WIDTH, NODE_HEIGHT } from './replay.ts';
+import { projectReplay, overviewViewport, NODE_WIDTH, NODE_HEIGHT } from './replay.ts';
 import type { GraphResponse } from './types.ts';
 
 const graph: Pick<GraphResponse, 'nodes' | 'edges'> = {
@@ -52,4 +52,18 @@ test('vertical layout preserves chronological edges and keeps labels at a readab
   assert.ok(result.nodes[1].position.y > result.nodes[0].position.y + NODE_HEIGHT);
   assert.equal(result.edges.filter((edge) => edge.animated).length, 1);
   assert.equal(result.edges.at(-1)?.target, 'e5');
+});
+
+test('overview fits every long-history node above playback controls and beside an open inspector', () => {
+  for (const layout of ['vertical', 'wrap'] as const) {
+    const nodes = projectReplay(graph, 99, 1000, {}, {}, layout).nodes;
+    const viewport = overviewViewport(nodes, 1000, 780, true);
+    assert.ok(viewport);
+    for (const node of nodes) {
+      assert.ok(node.position.x * viewport.zoom + viewport.x >= 350);
+      assert.ok((node.position.x + NODE_WIDTH) * viewport.zoom + viewport.x <= 934);
+      assert.ok(node.position.y * viewport.zoom + viewport.y >= 70);
+      assert.ok((node.position.y + NODE_HEIGHT) * viewport.zoom + viewport.y <= 668);
+    }
+  }
 });

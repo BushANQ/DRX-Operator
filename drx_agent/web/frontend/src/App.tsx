@@ -12,7 +12,7 @@ import { eventPresentation } from './presentation.ts';
 import { useSessionList, useSessionGraph } from './useRemoteJSON.ts';
 import type { ReactFlowInstance, NodeChange } from '@xyflow/react';
 import type { GraphResponse, ReplayNode, ReplayEdge, NodePositions, NodeMeasurements, SessionListItem, RemoteStatus } from './types.ts';
-import { projectReplay, isReplayShortcut, NODE_WIDTH, NODE_HEIGHT } from './replay.ts';
+import { projectReplay, overviewViewport, isReplayShortcut, NODE_WIDTH, NODE_HEIGHT } from './replay.ts';
 
 const EMPTY: never[] = [];
 const EMPTY_GRAPH: GraphResponse = {
@@ -254,7 +254,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
           <div className="graph-tools" role="group" aria-label="图谱操作">
             <button className="icon-button" disabled={disabled} aria-label="放大图谱" title="放大" onClick={() => { setFollow(false); void flow?.zoomIn({ duration: 160 }); }}><Plus size={17} /></button>
             <button className="icon-button" disabled={disabled} aria-label="缩小图谱" title="缩小" onClick={() => { setFollow(false); void flow?.zoomOut({ duration: 160 }); }}><Minus size={17} /></button>
-            <button className="icon-button" disabled={disabled} aria-label="查看全图" title="查看全图" onClick={() => { setFollow(false); void flow?.fitView({ includeHiddenNodes: true, minZoom: 0.001, padding: 0.22, duration: 220 }); }}><CornersOut size={18} /></button>
+            <button className="icon-button" disabled={disabled} aria-label="查看全图" title="查看全图" onClick={() => { setFollow(false); const viewport = overviewViewport(projected.nodes, canvasWidth, canvasHeight, inspectorOpen); if (viewport) void flow?.setViewport(viewport, { duration: 220 }); }}><CornersOut size={18} /></button>
             <button className={`icon-button ${layout === 'vertical' ? 'is-active' : ''}`} disabled={disabled} aria-label={layout === 'vertical' ? '切换折行布局' : '切换纵向布局'} title={layout === 'vertical' ? '折行布局' : '纵向布局'} onClick={() => { setLayout((value) => value === 'vertical' ? 'wrap' : 'vertical'); setFollow(true); }}><ArrowsDownUp size={18} /></button>
             <div className="tool-separator" />
             <button className={`icon-button ${follow ? 'is-active' : ''}`} disabled={disabled} aria-label={follow ? '关闭跟随当前记录' : '跟随当前记录'} aria-pressed={follow} title="跟随当前记录" onClick={() => setFollow((value) => !value)}><Crosshair size={18} /></button>
