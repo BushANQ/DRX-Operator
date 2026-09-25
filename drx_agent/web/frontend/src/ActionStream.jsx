@@ -231,12 +231,12 @@ export default function ActionStream({
         <div className="findings-panel-body animate-fade-in">
           <div className="findings-stats-grid">
             <div className="stat-card">
-              <div className="stat-num">{summary.targetsCount || 1}</div>
+              <div className="stat-num">{summary.targetsCount ?? 0}</div>
               <div className="stat-label">目标靶机</div>
             </div>
             <div className="stat-card">
-              <div className="stat-num">{summary.findingsCount || 1}</div>
-              <div className="stat-label">证实漏洞</div>
+              <div className="stat-num">{summary.findingsCount ?? 0}</div>
+              <div className="stat-label">发现记录</div>
             </div>
             <div className="stat-card">
               <div className="stat-num">{summary.totalActions || actions.length}</div>
@@ -268,8 +268,8 @@ export default function ActionStream({
                 summary.findings.map((f, i) => (
                   <div key={i} className="finding-item-box vuln-box">
                     <div className="finding-item-header">
-                      <span className="finding-badge vuln-badge">{f.severity || 'HIGH'}</span>
-                      <span className="finding-vuln-title">{f.title || f.name || '漏洞已证实'}</span>
+                      <span className="finding-badge vuln-badge">{f.severity || '无等级记录'}</span>
+                      <span className="finding-vuln-title">{f.claim || f.title || f.name || '无'}</span>
                     </div>
                     <div className="finding-item-content">
                       {f.description || f.detail || JSON.stringify(f)}
@@ -277,15 +277,7 @@ export default function ActionStream({
                   </div>
                 ))
               ) : (
-                <div className="finding-item-box vuln-box">
-                  <div className="finding-item-header">
-                    <span className="finding-badge vuln-badge">HIGH</span>
-                    <span className="finding-vuln-title">后台管理越权与未授权接口暴露</span>
-                  </div>
-                  <div className="finding-item-content">
-                    已捕获 /admin.html 后台入口及 Node.js 业务接口，存在参数篡改与鉴权边界绕过风险。
-                  </div>
-                </div>
+                <div className="finding-item-box">无</div>
               )}
             </div>
           </div>
