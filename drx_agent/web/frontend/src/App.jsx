@@ -223,6 +223,7 @@ export default function App() {
         currentStep={currentStep}
         totalSteps={totalSteps}
         stages={stages}
+        actions={actions}
         activeStageKey={currentAction.stageKey || '推理'}
         isPlaying={isPlaying}
         onTogglePlay={setIsPlaying}

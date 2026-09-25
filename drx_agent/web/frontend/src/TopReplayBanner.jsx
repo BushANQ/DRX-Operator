@@ -11,6 +11,7 @@ export default function TopReplayBanner({
   currentStep = 0,
   totalSteps = 38,
   stages = [],
+  actions = [],
   activeStageKey = '推理',
   isPlaying = false,
   onTogglePlay,
@@ -39,7 +40,7 @@ export default function TopReplayBanner({
 
   // Compute progress percentage
   const progressPercent =
-    totalSteps > 1
+    totalSteps > 0
       ? Math.min(100, Math.max(0, Math.round(((currentStep + 1) / totalSteps) * 100)))
       : 0;
 
@@ -197,7 +198,7 @@ export default function TopReplayBanner({
             const isActive = st.key === activeStageKey;
             const isCompleted = i <= stages.findIndex((s) => s.key === activeStageKey);
             // Height proportional to action count
-            const barHeight = Math.min(24, Math.max(4, (st.count || 1) * 3));
+            const barHeight = Math.min(24, Math.max(0, (st.count ?? 0) * 3));
 
             return (
               <div
@@ -207,9 +208,8 @@ export default function TopReplayBanner({
                 }`}
                 onClick={() => {
                   // Find first action in this stage
-                  onStepChange(
-                    Math.round((i / (stages.length - 1)) * (totalSteps - 1))
-                  );
+                  const firstStep = actions.findIndex((action) => action.stageKey === st.key);
+                  if (firstStep >= 0) onStepChange(firstStep);
                 }}
               >
                 {/* Mini activity bar above icon */}
