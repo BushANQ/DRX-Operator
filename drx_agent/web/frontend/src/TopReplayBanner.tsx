@@ -26,7 +26,7 @@ export default function TopReplayBanner({ sessionName, sessionCount, sessionsVis
         <button className={view === 'execution' ? 'is-active' : ''} aria-pressed={view === 'execution'} onClick={() => onViewChange('execution')}><Graph size={16} />执行图</button>
         <button className={view === 'causal' ? 'is-active' : ''} aria-pressed={view === 'causal'} onClick={() => onViewChange('causal')}><TreeStructure size={16} />因果图</button>
       </nav>
-      <div className="header-session" title={sessionName ?? '无会话'}><span className="header-session-caption">当前会话</span><span>{sessionName ?? '无会话'}</span></div>
+      <div className="header-session" title={sessionName ?? '无会话'}><span className="header-session-caption">已保存会话</span><span>{sessionName ?? '无会话'}</span></div>
       <div className="workspace-header-actions">
         <span className="header-records">{sessionCount == null ? '会话列表未读取' : `${sessionCount} 个会话`}</span>
         <button className="header-button" disabled={loading} onClick={onRefresh} aria-label="刷新会话"><ArrowClockwise size={16} className={loading ? 'is-spinning' : ''} /><span>刷新</span></button>

@@ -63,7 +63,8 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const { actions, stages, summary } = graph;
   const [step, setStep] = useState<number | null>(null);
   const currentStep = Math.max(0, Math.min(step ?? actions.length - 1, actions.length - 1));
-  const currentAction = actions[currentStep] ?? null;
+  const isSnapshot = step === null;
+  const currentAction = isSnapshot ? null : actions[currentStep] ?? null;
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [isLoop, setIsLoop] = useState(false);
@@ -133,12 +134,12 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     setCollapsed((old) => { const next = new Set(old); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   }, [flow]);
   const projected = useMemo(() => {
-    const projection = projectSemanticGraph(semanticGraph, currentStep, collapsed, positions, measurements);
+    const projection = projectSemanticGraph(semanticGraph, currentStep, collapsed, positions, measurements, isSnapshot ? 'snapshot' : 'replay');
     return { ...projection, nodes: projection.nodes.map((node) => ({
       ...node, focusable: false,
       data: { ...node.data, onOpen: () => openEntity(node.data), onToggle: () => toggleBranch(node.id) },
     })) };
-  }, [semanticGraph, currentStep, collapsed, positions, measurements, openEntity, toggleBranch]);
+  }, [semanticGraph, currentStep, collapsed, positions, measurements, isSnapshot, openEntity, toggleBranch]);
   const focusNode = projected.nodes.find((node) => projected.currentNodeIds.includes(node.id));
   useLayoutEffect(() => {
     const anchor = collapseAnchor.current;
@@ -216,10 +217,10 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
 
   const togglePlay = useCallback((playing: boolean) => {
     if (disabled || graphView !== 'execution') return;
-    if (playing && currentStep === actions.length - 1) setStep(0);
+    if (playing && (isSnapshot || currentStep === actions.length - 1)) setStep(0);
     setSelectedNodeId(null);
     setIsPlaying(playing);
-  }, [disabled, currentStep, actions.length, graphView]);
+  }, [disabled, currentStep, actions.length, graphView, isSnapshot]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -229,12 +230,12 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
         togglePlay(!isPlaying);
       } else if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
         event.preventDefault();
-        selectStep(currentStep + (event.code === 'ArrowLeft' ? -1 : 1));
+        selectStep(isSnapshot ? 0 : currentStep + (event.code === 'ArrowLeft' ? -1 : 1));
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [disabled, graphView, togglePlay, isPlaying, currentStep, selectStep]);
+  }, [disabled, graphView, togglePlay, isPlaying, currentStep, selectStep, isSnapshot]);
 
   useEffect(() => {
     const update = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -278,7 +279,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     setIsPlaying(false);
     setFollow(true);
   };
-  const playbackLabel = graphView === 'causal' ? '因果快照' : step === null ? '执行结构' : isPlaying ? '回放中' : currentStep === actions.length - 1 ? '回放结束' : '回放已暂停';
+  const playbackLabel = graphView === 'causal' ? '因果快照' : isSnapshot ? '历史会话 · 已保存结构' : isPlaying ? '回放中' : currentStep === actions.length - 1 ? '回放结束' : '回放已暂停';
 
   return (
     <div className="drx-replay-app">
@@ -329,7 +330,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
               : <><span>状态图例</span><span><Circle size={8} weight="fill" className="legend-complete" />已完成</span><span><Circle size={8} weight="fill" className="legend-running" />进行中</span><span><Circle size={8} weight="fill" className="legend-error" />失败 / 拒绝</span><span><Circle size={8} weight="fill" className="legend-unknown" />无状态记录</span></>}
           </div>}
           {inspectorOpen && (inspectorNode || inspectorAction) && !loading && !error && <NodeInspector node={inspectorNode} relations={semanticGraph.edges.filter((edge) => edge.source === inspectorNode?.id || edge.target === inspectorNode?.id)} action={inspectorAction} sessionId={summary.sessionId} onClose={closeInspector} />}
-          {graphView === 'execution' && <ReplayDock currentAction={currentAction} currentStep={currentStep} totalSteps={actions.length} stages={stages}
+          {graphView === 'execution' && <ReplayDock currentAction={currentAction} currentStep={currentStep} totalSteps={actions.length} stages={stages} isSnapshot={isSnapshot}
             pendingLabel={loading ? '正在读取记录…' : error ? '记录未加载' : null}
             isPlaying={isPlaying && !disabled} speed={speed} isLoop={isLoop} disabled={disabled}
             onTogglePlay={togglePlay} onSetSpeed={setSpeed} onToggleLoop={() => setIsLoop((value) => !value)}
@@ -337,7 +338,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
         </main>
         {sidebarVisible && <div className="workspace-activity" id="session-sidebar">
           {loading || error ? <div className="workspace-empty"><Info size={24} /><p>{loading ? '正在加载记录…' : '会话记录未加载'}</p></div> :
-            <ActionStream actions={actions} currentStep={currentStep} onSelectStep={selectStep} onOpenAction={openAction}
+            <ActionStream actions={actions} currentStep={currentStep} isSnapshot={isSnapshot} onSelectStep={selectStep} onOpenAction={openAction}
               summary={summary} view={panelView} onViewChange={setPanelView} />}
         </div>}
       </div>

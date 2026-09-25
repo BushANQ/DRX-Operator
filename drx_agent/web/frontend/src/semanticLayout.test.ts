@@ -45,6 +45,55 @@ test('snapshot nodes remain visible while future action nodes and their relation
   assert.equal(projectSemanticGraph(graph, 1).nodes.length, 5);
 });
 
+test('recorded groups follow their real reveal step without becoming current execution actions', () => {
+  const group: SemanticNode = { ...node('recorded-group', 1), kind: 'record_group', actionId: null };
+  const graph: SemanticGraph = {
+    nodes: [node('root'), node('first-action', 0), group, node('grouped-action', 1)],
+    edges: [edge('root', 'first-action'), edge('root', 'recorded-group'), edge('recorded-group', 'grouped-action')],
+  };
+  const early = projectSemanticGraph(graph, 0);
+  assert.deepEqual(early.nodes.map((item) => item.id), ['root', 'first-action']);
+  assert.equal(early.edges.length, 1);
+  const revealed = projectSemanticGraph(graph, 1);
+  assert.deepEqual(revealed.nodes.map((item) => item.id), graph.nodes.map((item) => item.id));
+  assert.deepEqual(revealed.actualCurrentNodeIds, ['grouped-action']);
+  assert.deepEqual(revealed.currentNodeIds, ['grouped-action']);
+  assert.equal(revealed.nodes.find((item) => item.id === 'recorded-group')?.data.current, false);
+});
+
+test('groups with a reveal step do not create a current action when no recorded action owns that step', () => {
+  const group: SemanticNode = { ...node('group', 1), kind: 'record_group', actionId: null };
+  const projected = projectSemanticGraph({ nodes: [group], edges: [] }, 1);
+  assert.equal(projected.nodes.length, 1);
+  assert.deepEqual(projected.actualCurrentNodeIds, []);
+  assert.deepEqual(projected.currentNodeIds, []);
+  assert.equal(projected.nodes[0].data.current, false);
+});
+
+test('snapshot-only context stays available in snapshots and is omitted from replay without inventing replacement edges', () => {
+  const context: SemanticNode = { ...node('context'), source: { replayVisibility: 'snapshot_only', original: 'context' } };
+  const graph: SemanticGraph = { nodes: [context, node('action', 0)], edges: [edge('context', 'action', 'record_group')] };
+  const replay = projectSemanticGraph(graph, 0);
+  assert.deepEqual(replay.nodes.map((item) => item.id), ['action']);
+  assert.deepEqual(replay.edges, []);
+  const snapshot = projectSemanticGraph(graph, 0, new Set(), {}, {}, 'snapshot');
+  assert.deepEqual(snapshot.nodes.map((item) => item.id), ['context', 'action']);
+  assert.equal(snapshot.edges.length, 1);
+  assert.deepEqual(snapshot.nodes[0].data.source, context.source);
+});
+
+test('snapshots show recorded future nodes without highlighting or animating a replay cursor', () => {
+  const graph = tree();
+  const snapshot = projectSemanticGraph(graph, 0, new Set(), {}, {}, 'snapshot');
+  assert.equal(snapshot.nodes.length, graph.nodes.length);
+  assert.equal(snapshot.edges.length, graph.edges.length);
+  assert.deepEqual(snapshot.actualCurrentNodeIds, []);
+  assert.deepEqual(snapshot.currentNodeIds, []);
+  assert.ok(snapshot.nodes.every((item) => !item.data.current && !item.data.containsCurrent));
+  assert.ok(snapshot.edges.every((item) => !item.animated));
+  assert.deepEqual(snapshot.nodeIdsByActionId.get('action-1'), ['right-action']);
+});
+
 test('collapsing a branch hides its real descendants and counts only revealed hidden nodes', () => {
   const graph = tree();
   const projected = projectSemanticGraph(graph, 0, new Set(['root']));

@@ -67,6 +67,7 @@ export function projectSemanticGraph(
   collapsed: ReadonlySet<string> = new Set(),
   positions: SemanticPositions = {},
   measurements: SemanticMeasurements = {},
+  mode: 'snapshot' | 'replay' = 'replay',
 ): SemanticProjection {
   const knownIds = new Set(graph.nodes.map((node) => node.id));
   if (knownIds.size !== graph.nodes.length) throw new Error('执行图节点标识重复');
@@ -74,7 +75,8 @@ export function projectSemanticGraph(
   if (graph.edges.some((edge) => !knownIds.has(edge.source) || !knownIds.has(edge.target))) {
     throw new Error('执行图关系指向无效');
   }
-  const eligible = graph.nodes.filter((node) => node.step === null || node.step <= currentStep);
+  const eligible = graph.nodes.filter((node) => mode === 'snapshot'
+    || (node.source.replayVisibility !== 'snapshot_only' && (node.step === null || node.step <= currentStep)));
   const eligibleIds = new Set(eligible.map((node) => node.id));
   const eligibleEdges = graph.edges.filter((edge) => eligibleIds.has(edge.source) && eligibleIds.has(edge.target));
   const incoming = new Map<string, string[]>();
@@ -88,7 +90,9 @@ export function projectSemanticGraph(
     topology.setEdge(edge.source, edge.target, {}, edge.id);
   }
 
-  const actualCurrentNodeIds = eligible.filter((node) => node.step !== null && node.step === currentStep).map((node) => node.id);
+  const actualCurrentNodeIds = mode === 'snapshot' ? [] : eligible
+    .filter((node) => node.actionId !== null && node.step !== null && node.step === currentStep)
+    .map((node) => node.id);
 
   // 多父关系按展开路径判定可见；闭环的入口分量保留原节点。
   const components = graphlib.alg.tarjan(topology);

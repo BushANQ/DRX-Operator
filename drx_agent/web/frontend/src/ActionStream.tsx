@@ -9,6 +9,7 @@ export type StreamView = 'stream' | 'findings';
 interface ActionStreamProps {
   actions: ReplayAction[];
   currentStep: number;
+  isSnapshot: boolean;
   onSelectStep: (step: number) => void;
   summary: SessionSummary;
   view: StreamView;
@@ -41,6 +42,7 @@ function CountCard({ value, label }: { value: unknown; label: string }) {
 export default function ActionStream({
   actions,
   currentStep,
+  isSnapshot,
   onSelectStep,
   summary,
   view,
@@ -61,7 +63,7 @@ export default function ActionStream({
   const scrollToCurrent = useCallback(() => {
     const container = listRef.current;
     const activeItem = activeItemRef.current;
-    if (!container || !activeItem) return;
+    if (isSnapshot || !container || !activeItem) return;
     const frame = container.getBoundingClientRect();
     const item = activeItem.getBoundingClientRect();
     if (item.top < frame.top || item.height > frame.height) {
@@ -70,7 +72,7 @@ export default function ActionStream({
       container.scrollTop += item.bottom - frame.bottom;
     }
     lastScrollTop.current = container.scrollTop;
-  }, []);
+  }, [isSnapshot]);
 
   useEffect(() => {
     const previous = lastCursor.current;
@@ -93,7 +95,7 @@ export default function ActionStream({
     <aside className="action-stream-panel" aria-label="会话事件日志和汇总">
       <div className="stream-panel-heading">
         <div className="stream-heading-label"><TerminalWindow size={17} aria-hidden="true" /><h2>事件日志</h2></div>
-        <span className="stream-action-tally" aria-label={`已回放 ${displayedStep} 条，共 ${actions.length} 条`}>{displayedStep}<span> / {actions.length}</span></span>
+        <span className="stream-action-tally" aria-label={isSnapshot ? `已保存 ${actions.length} 条记录` : `回放定位第 ${displayedStep} 条，共 ${actions.length} 条`}>{isSnapshot ? actions.length : displayedStep}<span>{isSnapshot ? ' 条记录' : ` / ${actions.length}`}</span></span>
       </div>
       <div className="stream-tabs-header" role="group" aria-label="记录视图">
         <button type="button" className={`stream-tab-btn${view === 'stream' ? ' active' : ''}`} aria-pressed={view === 'stream'} onClick={() => onViewChange('stream')}>
@@ -107,9 +109,9 @@ export default function ActionStream({
       {view === 'stream' && (
         <div className="action-stream-body">
           <div className="action-stream-meta-bar">
-            <span>已回放 {displayedStep} 条 · 全部 {actions.length} 条</span>
-            <button type="button" className={`stream-follow-btn${following ? ' active' : ''}`} aria-pressed={following} disabled={actions.length === 0} onClick={following ? stopFollowing : resumeFollowing}>
-              <Crosshair size={13} aria-hidden="true" /><span>{following ? '跟随中' : '跟随当前'}</span>
+            <span>{isSnapshot ? `历史会话 · 已保存 ${actions.length} 条` : `回放定位 ${displayedStep} / ${actions.length}`}</span>
+            <button type="button" className={`stream-follow-btn${following && !isSnapshot ? ' active' : ''}`} aria-pressed={following && !isSnapshot} disabled={actions.length === 0 || isSnapshot} onClick={following ? stopFollowing : resumeFollowing}>
+              <Crosshair size={13} aria-hidden="true" /><span>{isSnapshot ? '跟随回放' : following ? '跟随中' : '跟随当前'}</span>
             </button>
           </div>
           <div
@@ -128,14 +130,14 @@ export default function ActionStream({
           >
             {actions.length === 0 && <p className="empty-state">动作记录：无</p>}
             {actions.map((action, index) => {
-              const isActive = index === currentStep;
+              const isActive = !isSnapshot && index === currentStep;
               const preview = action.text || action.thought || action.output || action.input;
               const presentation = eventPresentation(action);
               return (
                 <article
                   key={`${summary.sessionId}:${action.id ?? index}`}
                   ref={isActive ? activeItemRef : null}
-                  className={`action-stream-item${isActive ? ' active-item' : ''}${index > currentStep ? ' upcoming-item' : ''}`}
+                  className={`action-stream-item${isActive ? ' active-item' : ''}${!isSnapshot && index > currentStep ? ' upcoming-item' : ''}`}
                   style={{ borderLeftColor: presentation.color }}
                   aria-current={isActive ? 'step' : undefined}
                 >
@@ -151,7 +153,7 @@ export default function ActionStream({
                     </span>
                     {action.kind !== 'message' && <span className="action-item-title">{display(action.title)}</span>}
                     <span className="action-item-preview">{display(preview)}</span>
-                    <span className="action-item-footer"><span>#{index + 1} · {isActive ? '当前记录' : index > currentStep ? '未回放' : '已回放'}</span><ArrowSquareOut size={13} aria-hidden="true" /></span>
+                    <span className="action-item-footer"><span>#{index + 1} · {isSnapshot ? '已保存' : isActive ? '当前记录' : index > currentStep ? '未回放' : '已回放'}</span><ArrowSquareOut size={13} aria-hidden="true" /></span>
                   </button>
                   <RawRecord value={action.data} label="事件" />
                 </article>
