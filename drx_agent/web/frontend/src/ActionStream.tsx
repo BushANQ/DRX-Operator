@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowSquareOut, Crosshair, ListBullets, Stack, TerminalWindow } from '@phosphor-icons/react';
 import { RawRecord } from './RecordDetails.tsx';
+import { eventPresentation } from './presentation.ts';
 import type { ReplayAction, SessionSummary } from './types.ts';
 
 export type StreamView = 'stream' | 'findings';
@@ -129,12 +130,13 @@ export default function ActionStream({
             {actions.map((action, index) => {
               const isActive = index === currentStep;
               const preview = action.text || action.thought || action.output || action.input;
+              const presentation = eventPresentation(action);
               return (
                 <article
                   key={`${summary.sessionId}:${action.id ?? index}`}
                   ref={isActive ? activeItemRef : null}
                   className={`action-stream-item${isActive ? ' active-item' : ''}${index > currentStep ? ' upcoming-item' : ''}`}
-                  style={{ borderLeftColor: action.categoryColor || '#94a3b8' }}
+                  style={{ borderLeftColor: presentation.color }}
                   aria-current={isActive ? 'step' : undefined}
                 >
                   <button
@@ -144,10 +146,10 @@ export default function ActionStream({
                     onClick={() => { onSelectStep(index); onOpenAction(index); }}
                   >
                     <span className="action-item-meta">
-                      <span className="action-category-badge" style={{ color: action.categoryColor || '#94a3b8' }}>{display(action.category || action.kind)}</span>
+                      <span className="action-category-badge" style={{ color: presentation.color }}>{display(action.category || action.kind)}</span>
                       <span className="action-item-time">{display(action.timeOffset)}</span>
                     </span>
-                    <span className="action-item-title">{display(action.title)}</span>
+                    {action.kind !== 'message' && <span className="action-item-title">{display(action.title)}</span>}
                     <span className="action-item-preview">{display(preview)}</span>
                     <span className="action-item-footer"><span>#{index + 1} · {isActive ? '当前记录' : index > currentStep ? '未回放' : '已回放'}</span><ArrowSquareOut size={13} aria-hidden="true" /></span>
                   </button>

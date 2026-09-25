@@ -305,3 +305,16 @@ button { transition: color 140ms, background 140ms, border-color 140ms; }
 .session-sidebar-footer { gap: 7px; min-height: 44px; padding: 8px 14px; border-top: 1px solid #273143; color: #8492a8; font-size: 11px; line-height: 1.5; }
 .session-sidebar-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .session-sidebar button:focus-visible { outline: 2px solid #7eafff; outline-offset: 2px; }
+.stream-heading-label h2 { font-size: 12px; font-weight: 600; margin: 0; }
+.rf-event-card { width: 220px; height: 86px; padding: 17px 11px 8px; position: relative; border-color: var(--status-color); background: #1b2638; border-radius: 6px; box-shadow: 0 3px 12px #0002; }
+.rf-event-card.current { border-color: #81a1f3; box-shadow: 0 0 0 1px #7297ef40, 0 0 15px #517fed10; }
+.rf-event-card.selected { outline: 1px solid #b6cafa; outline-offset: 3px; }
+.node-category { position: absolute; top: -8px; left: 10px; padding: 3px 6px; display: flex; align-items: center; gap: 4px; border: 1px solid var(--card-color); border-radius: 3px; background: #27334c; color: var(--card-color); font-size: 9px; line-height: 1; }
+.rf-event-card .rf-card-title { margin: 0; height: 33px; font-size: 12px; line-height: 1.4; font-weight: 500; }
+.node-footer { display: flex; align-items: center; gap: 7px; margin-top: 5px; font-size: 9px; color: #8ea3c1; }
+.node-status { color: var(--status-color); }
+.node-order { margin-left: auto; font: 9px var(--mono); color: #7d93b4; }
+.node-open { display: grid; place-items: center; border: 0; padding: 1px; color: #8ca9d3; background: transparent; }
+.node-open:hover { color: #e5efff; }
+.rf-event-card .react-flow__handle { background: #7586a1; border-color: #acbfd9; width: 4px; height: 4px; opacity: .65; }
+@media (prefers-reduced-motion: reduce) { .react-flow__edge.animated path { animation: none !important; } }

@@ -68,6 +68,8 @@ export interface EventNodeData extends Record<string, unknown> {
   status: string | null;
   color: string;
   current?: boolean;
+  kind?: string;
+  category?: string;
   sourceSide?: Position;
   targetSide?: Position;
   onOpen?: () => void;

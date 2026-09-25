@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { projectReplay } from './replay.ts';
+import { projectReplay, NODE_WIDTH, NODE_HEIGHT } from './replay.ts';
 import type { GraphResponse } from './types.ts';
 
 const graph: Pick<GraphResponse, 'nodes' | 'edges'> = {
@@ -27,20 +27,29 @@ test('narrow layouts stay within one readable column and preserve manual positio
   assert.ok(narrow.nodes.every((node) => node.position.x === 24));
   const custom = projectReplay(graph, 3, 360, { '1:e2': { x: 40, y: 70 } });
   assert.deepEqual(custom.nodes[2].position, { x: 40, y: 70 });
-  assert.equal(projectReplay(graph, 3, 1000, { '1:e2': { x: 40, y: 70 } }).columns, 3);
+  assert.equal(projectReplay(graph, 3, 1000, { '1:e2': { x: 40, y: 70 } }, {}, 'wrap').columns, 3);
 });
 
 test('rewind and forward recompute edge colors from source data', () => {
   const late = projectReplay(graph, 4, 900);
   assert.ok(late.edges[0].style);
   late.edges[0].style.stroke = '#1e293b';
-  assert.equal(projectReplay(graph, 4, 900).edges[0].style?.stroke, '#4897ad');
+  assert.equal(projectReplay(graph, 4, 900).edges[0].style?.stroke, '#455672');
 });
 
 test('actual node measurements survive replay without inventing measurements for unseen nodes', () => {
-  const measurements = { e0: { width: 260, height: 132 } };
+  const measurements = { e0: { width: NODE_WIDTH, height: NODE_HEIGHT } };
   const projected = projectReplay(graph, 3, 900, {}, measurements);
   assert.deepEqual(projected.nodes[0].measured, measurements.e0);
   assert.equal(projected.nodes[1].measured, undefined);
-  assert.equal(projected.nodes[1].width, 260);
+  assert.equal(projected.nodes[1].width, NODE_WIDTH);
+});
+
+test('vertical layout preserves chronological edges and keeps labels at a readable scale', () => {
+  const result = projectReplay(graph, 5, 1000);
+  assert.equal(result.columns, 1);
+  assert.ok(result.nodes.every((node) => node.position.x === result.nodes[0].position.x));
+  assert.ok(result.nodes[1].position.y > result.nodes[0].position.y + NODE_HEIGHT);
+  assert.equal(result.edges.filter((edge) => edge.animated).length, 1);
+  assert.equal(result.edges.at(-1)?.target, 'e5');
 });

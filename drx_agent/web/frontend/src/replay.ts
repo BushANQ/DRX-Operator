@@ -1,8 +1,8 @@
-import { Position } from '@xyflow/react';
+import { MarkerType, Position } from '@xyflow/react';
 import type { GraphResponse, NodeMeasurements, NodePositions, ReplayEdge, ReplayNode } from './types.ts';
 
-export const NODE_WIDTH = 260;
-export const NODE_HEIGHT = 132;
+export const NODE_WIDTH = 220;
+export const NODE_HEIGHT = 86;
 
 export interface ReplayProjection {
   nodes: ReplayNode[];
@@ -17,8 +17,9 @@ export function projectReplay(
   canvasWidth: number,
   positions: NodePositions = {},
   measurements: NodeMeasurements = {},
+  layout: 'vertical' | 'wrap' = 'vertical',
 ): ReplayProjection {
-  const columns = Math.max(1, Math.min(3, Math.floor((canvasWidth - 32) / 304)));
+  const columns = layout === 'vertical' ? 1 : Math.max(1, Math.min(3, Math.floor((canvasWidth - 32) / 276)));
   const visible = graph.nodes.filter((node) => node.data.step <= currentStep);
   const nodes = visible.map((node): ReplayNode => {
     const index = node.data.step;
@@ -29,7 +30,7 @@ export function projectReplay(
     const targetSide = offset === 0 ? Position.Top : row % 2 ? Position.Right : Position.Left;
     return {
       ...node,
-      position: positions[`${columns}:${node.id}`] ?? { x: 24 + column * 304, y: 24 + row * 188 },
+      position: positions[`${columns}:${node.id}`] ?? { x: 24 + column * 276, y: 24 + row * 148 },
       style: { width: NODE_WIDTH, height: NODE_HEIGHT },
       width: NODE_WIDTH,
       height: NODE_HEIGHT,
@@ -41,14 +42,18 @@ export function projectReplay(
     };
   });
   const visibleIds = new Set(nodes.map((node) => node.id));
+  const currentNodeId = nodes.find((node) => node.data.current)?.id;
   const edges = graph.edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target))
-    .map((edge): ReplayEdge => ({
-      ...edge,
-      style: { ...edge.style, stroke: edge.data?.color ?? '#4897ad', strokeWidth: 1.5 },
-      animated: false,
-      selectable: false,
-      focusable: false,
-    }));
+    .map((edge): ReplayEdge => {
+      const current = currentNodeId === edge.target;
+      const color = current ? '#829fff' : edge.data?.color ?? '#455672';
+      return { ...edge, type: 'default',
+        style: { ...edge.style, stroke: color, strokeWidth: current ? 1.8 : 1.2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color, width: 12, height: 12 },
+        animated: current, selectable: false, focusable: false,
+      };
+    });
+
   return { nodes, edges, columns };
 }
 

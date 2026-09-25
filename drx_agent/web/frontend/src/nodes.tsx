@@ -1,40 +1,24 @@
 import { memo, type CSSProperties } from 'react';
-import type { NodeProps } from '@xyflow/react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { ArrowSquareOut, ChatCircle, GitBranch, ShieldCheck, WarningCircle, Wrench } from '@phosphor-icons/react';
+import { statusPresentation } from './presentation.ts';
 import type { ReplayNode } from './types.ts';
-import { Handle, Position } from '@xyflow/react';
 
-const display = (value: unknown) => value == null || value === '' ? '无' : String(value);
-
-// React Flow consumes these components through the stable nodeTypes registry below.
 // oxlint-disable-next-line react/only-export-components
 const EventNode = memo(({ data, selected }: NodeProps<ReplayNode>) => {
-  const isCurrent = data.current ?? data._current ?? false;
-  const isPending = data.pending ?? data._pending ?? false;
-  const isSelected = selected || data.selected;
-  const color = data.color || '#38bdf8';
-  const title = display(data.title);
-
+  const status = statusPresentation(data.status);
+  const Icon = data.kind === 'tool' ? Wrench : data.kind === 'worker' ? GitBranch : data.kind === 'approval' ? ShieldCheck : data.kind === 'error' ? WarningCircle : ChatCircle;
+  const title = data.title || '无';
   return (
-    <div
-      className={`rf-event-card ${isCurrent ? 'current' : ''} ${isPending ? 'pending' : ''} ${isSelected ? 'selected' : ''}`}
-      style={{ '--card-color': color, width: 260, minHeight: 112 } as CSSProperties}
-    >
-      <Handle isConnectable={false} type="target" position={data.targetSide || Position.Top} style={{ background: color }} />
-      <div className="rf-card-badge-row">
-        <span className="rf-badge event-badge">{Number.isInteger(data.step) ? `记录 ${data.step + 1}` : '记录'}</span>
-        <span className="rf-event-status">状态：{display(data.status)}</span>
-        {isCurrent && <span className="rf-pulse-ring" aria-label="当前回放记录" />}
-      </div>
+    <div className={`rf-event-card ${data.current ? 'current' : ''} ${selected ? 'selected' : ''} status-${status.tone}`}
+      style={{ '--card-color': data.color, '--status-color': status.color } as CSSProperties}>
+      <Handle isConnectable={false} type="target" position={data.targetSide ?? Position.Top} />
+      <div className="node-category"><Icon size={10} weight="bold" /><span>{data.category || data.subtitle}</span></div>
       <div className="rf-card-title" title={title}>{title}</div>
-      <div className="rf-card-subtitle" title={display(data.subtitle)}>
-        <span>{display(data.subtitle)}</span>
-        <button className="rf-node-open nodrag" type="button" aria-label={`查看记录 ${data.step + 1} 详情`}
-          onClick={(event) => { event.stopPropagation(); data.onOpen?.(); }}>详情</button>
-      </div>
-      <Handle isConnectable={false} type="source" position={data.sourceSide || Position.Bottom} style={{ background: color }} />
+      <div className="node-footer"><span className="node-status" title={data.status ?? '无'}>{status.label}</span><span className="node-order">#{data.step + 1}</span><button className="node-open nodrag" aria-label={`查看记录 ${data.step + 1} 详情`} onClick={(event) => { event.stopPropagation(); data.onOpen?.(); }}><ArrowSquareOut size={13} /></button></div>
+      <Handle isConnectable={false} type="source" position={data.sourceSide ?? Position.Bottom} />
     </div>
   );
 });
 EventNode.displayName = 'EventNode';
-
 export const nodeTypes = { eventNode: EventNode };

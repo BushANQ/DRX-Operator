@@ -7,7 +7,8 @@ import ActionStream from './ActionStream';
 import SessionSidebar from './SessionSidebar.tsx';
 import ReplayDock from './ReplayDock.tsx';
 import NodeInspector from './NodeInspector.tsx';
-import { ArrowClockwise, Circle, CaretLeft, CaretRight, CornersOut, Crosshair, Info, MapTrifold, Minus, Pause, Play, Plus, WarningCircle } from '@phosphor-icons/react';
+import { ArrowClockwise, ArrowsDownUp, Circle, CaretLeft, CaretRight, CornersOut, Crosshair, Info, MapTrifold, Minus, Pause, Play, Plus, WarningCircle } from '@phosphor-icons/react';
+import { eventPresentation } from './presentation.ts';
 import { useSessionList, useSessionGraph } from './useRemoteJSON.ts';
 import type { ReactFlowInstance, NodeChange } from '@xyflow/react';
 import type { GraphResponse, ReplayNode, ReplayEdge, NodePositions, NodeMeasurements, SessionListItem, RemoteStatus } from './types.ts';
@@ -65,6 +66,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
   const [sessionsVisible, setSessionsVisible] = useState(() => window.innerWidth >= 1100);
   const [panelView, setPanelView] = useState<'stream' | 'findings'>('stream');
   const [mapVisible, setMapVisible] = useState(false);
+  const [layout, setLayout] = useState<'vertical' | 'wrap'>('vertical');
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth >= 850);
   const [follow, setFollow] = useState(true);
   const [positions, setPositions] = useState<NodePositions>({});
@@ -85,12 +87,17 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     setInspectorOpen(true);
   }, []);
   const projected = useMemo(() => {
-    const projection = projectReplay(graph, currentStep, canvasWidth, positions, measurements);
-    return { ...projection, nodes: projection.nodes.map((node) => ({
-      ...node, focusable: false,
-      data: { ...node.data, onOpen: () => openNode(node.data.step) },
-    })) };
-  }, [graph, currentStep, canvasWidth, positions, measurements, openNode]);
+    const projection = projectReplay(graph, currentStep, canvasWidth, positions, measurements, layout);
+    return { ...projection, nodes: projection.nodes.map((node) => {
+      const action = actions[node.data.step];
+      const presentation = action ? eventPresentation(action) : null;
+      return { ...node, focusable: false,
+        data: { ...node.data, color: presentation?.color ?? node.data.color,
+          kind: action?.kind, category: presentation?.label,
+          title: action?.tool ?? node.data.title, onOpen: () => openNode(node.data.step) },
+      };
+    }) };
+  }, [graph, actions, currentStep, canvasWidth, positions, measurements, openNode, layout]);
   const focusNode = projected.nodes.find((node) => node.id === currentAction?.cardId);
 
   useEffect(() => {
@@ -233,6 +240,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
             <button className="icon-button" disabled={disabled} aria-label="放大图谱" title="放大" onClick={() => { setFollow(false); void flow?.zoomIn({ duration: 160 }); }}><Plus size={17} /></button>
             <button className="icon-button" disabled={disabled} aria-label="缩小图谱" title="缩小" onClick={() => { setFollow(false); void flow?.zoomOut({ duration: 160 }); }}><Minus size={17} /></button>
             <button className="icon-button" disabled={disabled} aria-label="查看全图" title="查看全图" onClick={() => { setFollow(false); void flow?.fitView({ includeHiddenNodes: true, minZoom: 0.001, padding: 0.22, duration: 220 }); }}><CornersOut size={18} /></button>
+            <button className={`icon-button ${layout === 'vertical' ? 'is-active' : ''}`} disabled={disabled} aria-label={layout === 'vertical' ? '切换折行布局' : '切换纵向布局'} title={layout === 'vertical' ? '折行布局' : '纵向布局'} onClick={() => { setLayout((value) => value === 'vertical' ? 'wrap' : 'vertical'); setFollow(true); }}><ArrowsDownUp size={18} /></button>
             <div className="tool-separator" />
             <button className={`icon-button ${follow ? 'is-active' : ''}`} disabled={disabled} aria-label={follow ? '关闭跟随当前记录' : '跟随当前记录'} aria-pressed={follow} title="跟随当前记录" onClick={() => setFollow((value) => !value)}><Crosshair size={18} /></button>
             <button className={`icon-button ${mapVisible ? 'is-active' : ''}`} disabled={disabled} aria-label="显示缩略图" aria-pressed={mapVisible} title="缩略图" onClick={() => setMapVisible((value) => !value)}><MapTrifold size={18} /></button>
