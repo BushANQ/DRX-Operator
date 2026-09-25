@@ -134,8 +134,8 @@ export default function App() {
     );
 
     // Update edges: active glow for traversed path
-    setEdges((eds) =>
-      eds.map((edge) => {
+    setEdges(
+      (graphData.edges || []).map((edge) => {
         const sourceLit = litCardIds.has(edge.source);
         const targetLit = litCardIds.has(edge.target);
         const isEdgeLit = sourceLit && targetLit;
