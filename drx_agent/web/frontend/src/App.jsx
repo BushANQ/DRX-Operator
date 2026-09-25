@@ -178,7 +178,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
               <div className="canvas-actions">
                 <button disabled={disabled} aria-pressed={follow} onClick={() => setFollow((value) => !value)}>跟随当前{follow ? '：开' : '：关'}</button>
                 <button disabled={disabled} onClick={locateCurrent}>定位当前</button>
-                <button disabled={disabled} onClick={() => { setFollow(false); flow?.fitView({ padding: 0.15, duration: 250 }); }}>查看全图</button>
+                <button disabled={disabled} onClick={() => { setFollow(false); flow?.fitView({ includeHiddenNodes: true, minZoom: 0.001, padding: 0.15, duration: 250 }); }}>查看全图</button>
                 <button aria-expanded={sidebarVisible} aria-controls="session-sidebar" onClick={() => setSidebarVisible((value) => !value)}>{sidebarVisible ? '收起详情' : '显示详情'}</button>
               </div>
             </div>
@@ -194,7 +194,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
                     setDetailRequestId((value) => value + 1);
                   }}
                   nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null}
-                  onlyRenderVisibleElements minZoom={0.2} maxZoom={2}
+                  onlyRenderVisibleElements minZoom={0.001} maxZoom={2}
                   proOptions={{ hideAttribution: true }}
                 >
                   <Background color="#203041" gap={24} size={1} />
