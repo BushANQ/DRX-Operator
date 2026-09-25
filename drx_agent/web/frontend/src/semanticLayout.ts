@@ -3,7 +3,7 @@ import type { GraphLabel, NodeLabel, EdgeLabel } from '@dagrejs/dagre';
 import { MarkerType, Position } from '@xyflow/react';
 import type {
   SemanticGraph, SemanticMeasurements, SemanticPositions, SemanticProjection,
-  SemanticFlowNode, SemanticFlowEdge,
+  SemanticFlowNode, SemanticFlowEdge, SemanticNode,
 } from './semanticTypes.ts';
 
 export const SEMANTIC_NODE_WIDTH = 220;
@@ -21,11 +21,12 @@ function reachable(starts: Iterable<string>, adjacency: ReadonlyMap<string, stri
   return visited;
 }
 
-function dimensions(id: string, measurements: SemanticMeasurements): { width: number; height: number } {
-  const measured = measurements[id];
+function dimensions(node: SemanticNode, measurements: SemanticMeasurements): { width: number; height: number } {
+  const measured = measurements[node.id];
+  const action = node.kind === 'action';
   return {
-    width: measured && Number.isFinite(measured.width) && measured.width > 0 ? measured.width : SEMANTIC_NODE_WIDTH,
-    height: measured && Number.isFinite(measured.height) && measured.height > 0 ? measured.height : SEMANTIC_NODE_HEIGHT,
+    width: measured && Number.isFinite(measured.width) && measured.width > 0 ? measured.width : action ? 176 : SEMANTIC_NODE_WIDTH,
+    height: measured && Number.isFinite(measured.height) && measured.height > 0 ? measured.height : action ? 72 : SEMANTIC_NODE_HEIGHT,
   };
 }
 
@@ -80,7 +81,7 @@ export function projectSemanticGraph(
   const outgoing = new Map<string, string[]>();
   const topology = new Graph<GraphLabel, NodeLabel, EdgeLabel>({ directed: true, multigraph: true });
   topology.setGraph({ rankdir: 'TB' });
-  for (const node of eligible) topology.setNode(node.id, dimensions(node.id, measurements));
+  for (const node of eligible) topology.setNode(node.id, dimensions(node, measurements));
   for (const edge of eligibleEdges) {
     append(outgoing, edge.source, edge.target);
     append(incoming, edge.target, edge.source);
@@ -104,8 +105,8 @@ export function projectSemanticGraph(
   const visible = eligible.filter((node) => visibleIds.has(node.id));
   const visibleEdges = eligibleEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target) && !collapsed.has(edge.source));
   const dag = new Graph<GraphLabel, NodeLabel, EdgeLabel>({ directed: true, multigraph: true });
-  dag.setGraph({ rankdir: 'TB', nodesep: 64, ranksep: 92, edgesep: 18, marginx: 28, marginy: 28 });
-  for (const node of visible) dag.setNode(node.id, dimensions(node.id, measurements));
+  dag.setGraph({ rankdir: 'TB', nodesep: 38, ranksep: 76, edgesep: 18, marginx: 28, marginy: 28 });
+  for (const node of visible) dag.setNode(node.id, dimensions(node, measurements));
   for (const edge of visibleEdges) dag.setEdge(edge.source, edge.target, { minlen: 1, weight: 1 }, edge.id);
   if (visible.length) layout(dag);
   const currentSet = new Set(actualCurrentNodeIds.flatMap((id) => nearestVisibleAncestors(id, incoming, visibleIds)));
@@ -113,7 +114,7 @@ export function projectSemanticGraph(
   const nodeIdsByActionId = new Map<string, string[]>();
   for (const node of graph.nodes) if (node.actionId !== null) append(nodeIdsByActionId, node.actionId, node.id);
   const nodes = visible.map((node): SemanticFlowNode => {
-    const measured = dimensions(node.id, measurements);
+    const measured = dimensions(node, measurements);
     const point = dag.node(node.id);
     if (!point || typeof point.x !== 'number' || typeof point.y !== 'number') throw new Error('执行图布局失败');
     const descendants = collapsed.has(node.id) ? reachable(outgoing.get(node.id) ?? [], outgoing) : new Set<string>();

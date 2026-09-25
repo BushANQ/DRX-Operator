@@ -164,7 +164,15 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     if (initialView.current !== context || (follow && step === null)) {
       initialView.current = context;
       const viewport = overviewViewport(projected.nodes, canvasWidth, canvasHeight, false);
-      if (viewport) void flow.setViewport(viewport, { duration: 0 });
+      if (viewport) {
+        if (graphView === 'execution' && viewport.zoom < 0.55) {
+          const root = projected.nodes.find((node) => node.data.kind === 'session') ?? projected.nodes[0];
+          viewport.zoom = 0.55;
+          viewport.x = canvasWidth / 2 - (root.position.x + (root.width ?? SEMANTIC_NODE_WIDTH) / 2) * viewport.zoom;
+          viewport.y = 115 - root.position.y * viewport.zoom;
+        }
+        void flow.setViewport(viewport, { duration: 0 });
+      }
     } else if (follow && step !== null) locateCurrent();
   }, [flow, projected.nodes, selectedSessionId, graphView, follow, step, canvasWidth, canvasHeight, locateCurrent]);
 
@@ -257,7 +265,7 @@ function ReplayWorkspace({ sessions, selectedSessionId, onSelectSession, listSta
     setIsPlaying(false);
     setFollow(true);
   };
-  const playbackLabel = graphView === 'causal' ? '因果快照' : step === null ? '执行结构总览' : isPlaying ? '回放中' : currentStep === actions.length - 1 ? '回放结束' : '回放已暂停';
+  const playbackLabel = graphView === 'causal' ? '因果快照' : step === null ? '执行结构' : isPlaying ? '回放中' : currentStep === actions.length - 1 ? '回放结束' : '回放已暂停';
 
   return (
     <div className="drx-replay-app">
