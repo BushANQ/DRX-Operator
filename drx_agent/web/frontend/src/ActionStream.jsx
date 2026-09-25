@@ -187,7 +187,7 @@ export default function ActionStream({
               const finding = asRecord(value);
               return (
                 <div className="finding-item-box" key={`${finding.id ?? 'finding'}-${index}`}>
-                  <div className="finding-item-header"><span className="finding-vuln-title">{display(finding.title || finding.name || (typeof value === 'string' ? value : null))}</span></div>
+                  <div className="finding-item-header"><span className="finding-vuln-title">{display(finding.claim || finding.title || finding.name || (typeof value === 'string' ? value : null))}</span></div>
                   <div className="finding-item-content">严重程度：{display(finding.severity)}</div>
                   <div className="finding-item-content">状态：{display(finding.status)}</div>
                   <div className="finding-item-content">确认状态：{findingConfirmation(finding)}</div>
