@@ -141,7 +141,8 @@ export default function ActionStream({
                 </div>
                 <div className="detail-title-large">{display(currentAction.title)}</div>
                 <dl className="detail-metadata-list">
-                  <div><dt>执行者</dt><dd>{display(currentAction.actor || currentAction.role)}</dd></div>
+                  <div><dt>执行者</dt><dd>{display(currentAction.actor)}</dd></div>
+                  <div><dt>消息角色</dt><dd>{display(currentAction.role)}</dd></div>
                   <div><dt>工具</dt><dd>{display(currentAction.tool)}</dd></div>
                   <div><dt>状态</dt><dd>{display(currentAction.status)}</dd></div>
                 </dl>
