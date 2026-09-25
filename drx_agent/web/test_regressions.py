@@ -10,6 +10,16 @@ def snapshot(records=None, kb=None):
 
 
 class DashboardRegressions(unittest.TestCase):
+    def test_host_buckets_preserve_all_findings_and_credentials(self):
+        graph = _session_to_graph(snapshot(kb={
+            "findings": {"example.test": [{"claim": "first"}, {"claim": "second"}]},
+            "credentials": {"example.test": [{"username": str(i)} for i in range(25)]},
+        }))
+        self.assertEqual(graph["summary"]["findingsCount"], 2)
+        self.assertEqual(graph["summary"]["credsCount"], 25)
+        self.assertEqual(len(graph["summary"]["creds"]), 25)
+        self.assertEqual(graph["summary"]["findings"][1]["host"], "example.test")
+
     def test_repeated_requests_are_not_dropped_or_sampled(self):
         records = [{"id": f"call-{i}", "kind": "tool", "tool": "http_fetch",
                     "input": {"url": f"https://example.test/{i}"}, "output": str(i)}

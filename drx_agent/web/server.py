@@ -192,9 +192,16 @@ def _session_to_graph(raw: dict) -> dict:
     raw_targets = kb_data.get("targets", {})
     targets_list = list(raw_targets.values()) if isinstance(raw_targets, dict) else list(raw_targets)
     raw_findings = kb_data.get("findings", {})
-    findings_list = list(raw_findings.values()) if isinstance(raw_findings, dict) else list(raw_findings)
+    def records_by_host(value):
+        if not isinstance(value, dict):
+            return list(value)
+        return [dict(record, host=record.get("host") or host)
+                for host, bucket in value.items()
+                for record in (bucket if isinstance(bucket, list) else [bucket])]
+
+    findings_list = records_by_host(raw_findings)
     raw_creds = kb_data.get("credentials", {})
-    creds_list = list(raw_creds.values()) if isinstance(raw_creds, dict) else list(raw_creds)
+    creds_list = records_by_host(raw_creds)
 
     target_host = "l******.com"
     target_notes = "站点目标研判 · 端口 3000 · Node.js"
@@ -680,9 +687,9 @@ def _session_to_graph(raw: dict) -> dict:
         "findingsCount": len(findings_list),
         "targetsCount": len(targets_list),
         "credsCount": len(creds_list),
-        "findings": findings_list[:20],
-        "targets": targets_list[:20],
-        "creds": creds_list[:20],
+        "findings": findings_list,
+        "targets": targets_list,
+        "creds": creds_list,
     }
 
     return {
