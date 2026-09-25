@@ -95,7 +95,7 @@ const SemanticNodeCard = memo(({ data, selected }: NodeProps<SemanticFlowNode>) 
       data-status={data.status ?? ''}
     >
       <Handle type="target" position={Position.Top} isConnectable={false} />
-      <div className="semantic-node-heading"><SemanticKindChip kind={data.kind} />{(data.current || data.containsCurrent) && <span className="semantic-node-current">{data.current ? '当前' : '含当前'}</span>}</div>
+      <div className="semantic-node-heading"><SemanticKindChip kind={data.kind} />{(data.current || data.containsCurrent) && <span className="semantic-node-current">{data.containsCurrent ? '含当前' : '当前'}</span>}</div>
       <div className="semantic-node-title" title={title}>{title}</div>
       <div className="semantic-node-footer">
         <span className="semantic-node-status" title={data.status ?? '无'}><span className="semantic-status-dot" aria-hidden="true" />{status.label}</span>
