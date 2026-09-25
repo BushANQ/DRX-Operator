@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any, Awaitable, Callable, Optional
 
 from drx_agent.agent.steering import MessageInterrupt, MessageSignal
+from drx_agent.agent.execution_context import advance_turn, execution_context, execution_scope, worker_context
 from drx_agent.event_bus import Activity, Event, EventBus, EventType, activity_model_stream
 
 logger = logging.getLogger(__name__)
@@ -115,8 +116,24 @@ class SubAgent:
         self.started_at: float | None = None
         self.last_activity_at: float | None = None
         self._activity: Activity | None = None
+        self.execution_task_id: str | None = None
+        self._execution_parent = execution_context()
+        self._execution_capture: dict = {}
+        self._execution_previous_turn_id: str | None = None
+        self._capture_queued = False
+        self._capture_started_at: float | None = None
+
+    def _begin_execution_capture(self) -> None:
+        parent = execution_context()
+        if not parent.get("run_id") and self.activation == 0:
+            parent = {**self._execution_parent, **parent}
+        self._execution_parent = deepcopy(parent)
+        self._execution_capture = worker_context(parent, self.agent_id, self.execution_task_id)
+        self._capture_started_at = None
 
     def queue(self) -> None:
+        self._begin_execution_capture()
+        self._capture_queued = True
         self._activity = Activity(
             self.event_bus, "worker", f"{self.agent_type} · {self.target}",
             agent_id=self.agent_id, state="queued",
@@ -128,6 +145,9 @@ class SubAgent:
             "agent_id": self.agent_id, "type": self.agent_type, "role": self.agent_type,
             "target": self.target, "task": self.task, "status": self.status.value,
             "text": "", "error": "",
+            "dispatch_id": self._execution_capture.get("dispatch_id"),
+            "execution_context": deepcopy(self._execution_capture),
+            "started_at": self._capture_started_at,
         }))
 
     def publish_result(self, result: SubAgentResult) -> None:
@@ -136,6 +156,9 @@ class SubAgent:
             "target": self.target, "task": self.task, "status": result.status.value,
             "scripts_executed": result.scripts_executed,
             "text": result.text, "error": result.error,
+            "dispatch_id": self._execution_capture.get("dispatch_id"),
+            "execution_context": deepcopy(self._execution_capture),
+            "started_at": self._capture_started_at, "completed_at": time.time(),
         }))
 
     def request_stop(self) -> None:
@@ -234,9 +257,12 @@ class SubAgent:
         messages = detached["messages"]
         if detached["activation"] and (len(messages) < 2 or messages[1]["role"] != "user"):
             raise ValueError("activated resident history must retain its initial context")
+        if not isinstance(detached.get("execution_capture", {}), dict):
+            raise ValueError("resident execution metadata must be an object")
         return {
             "messages": detached["messages"], "activation": detached["activation"],
             "stopped": detached["stopped"],
+            "execution_capture": detached.get("execution_capture", {}),
         }
 
     def snapshot_runtime(self) -> dict:
@@ -246,6 +272,7 @@ class SubAgent:
         messages.extend(self._cancelled_call(call) for call in pending.values())
         return self.validate_runtime({
             "messages": messages, "activation": self.activation, "stopped": self._interrupt,
+            "execution_capture": self._execution_capture,
         })
 
     def _take_notification(self) -> tuple[bool, str]:
@@ -280,6 +307,9 @@ class SubAgent:
     async def run(self) -> SubAgentResult:
         if self.status is SubAgentStatus.RUNNING:
             raise RuntimeError("sub-agent activation is already running")
+        if not self._capture_queued:
+            self._begin_execution_capture()
+        self._capture_queued = False
         self.activation += 1
         if not self.messages:
             self.messages.extend([
@@ -289,6 +319,7 @@ class SubAgent:
         self.status = SubAgentStatus.RUNNING
         started = asyncio.get_running_loop().time()
         self.started_at = self.last_activity_at = time.time()
+        self._capture_started_at = self.started_at
         if self._activity is None:
             self._activity = Activity(
                 self.event_bus, "worker", f"{self.agent_type} · {self.target}",
@@ -312,7 +343,10 @@ class SubAgent:
                     max(0.0, self.ttl - (asyncio.get_running_loop().time() - started))
                     if self.ttl else None
                 )
-                await _wait_owned(self._react_loop(result), remaining)
+                async def captured_react():
+                    with execution_scope(self._execution_capture):
+                        await self._react_loop(result)
+                await _wait_owned(captured_react(), remaining)
         except asyncio.TimeoutError:
             self.status = SubAgentStatus.TIMEOUT
             result.error = f"ttl ({self.ttl}s) exceeded"
@@ -352,6 +386,8 @@ class SubAgent:
             saw_error = False
             model_finished = False
             interrupted = False
+            self._execution_previous_turn_id = advance_turn(self.agent_id, self._execution_previous_turn_id)
+            self._execution_capture = execution_context()
 
             try:
                 async def _consume():
@@ -500,7 +536,8 @@ class SubAgent:
                 return
             try:
                 try:
-                    output = await executor(call["name"], call["input"])
+                    with execution_scope(tool_call_id=call.get("id")):
+                        output = await executor(call["name"], call["input"])
                 except Exception as exc:
                     output = json.dumps(
                         {"error": f"tool raised: {exc}"}, ensure_ascii=False

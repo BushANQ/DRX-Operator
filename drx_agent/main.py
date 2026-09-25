@@ -537,6 +537,9 @@ class DrxAgent:
             project_note=self.master.project_note.to_dict(),
             team=self.master._export_team_state(),
             transcript=self.transcript.export(),
+            execution_capture={"version": 1, "request_id": getattr(self.master, "_execution_request_id", None)},
+            swarm={"enabled": self.master.swarm_mode, "batch_size": self.master.batch_size,
+                   "max_concurrent": self.master.scheduler.max_concurrent},
             model_selection=(
                 self.model_selection.export_selection()
                 if getattr(self, "model_selection", None) is not None else None
@@ -585,6 +588,9 @@ class DrxAgent:
                     raise ValueError("Saved todos must be a list of objects")
                 if restored["mode"] not in ("act", "plan"):
                     raise ValueError("Invalid saved operating mode")
+                capture = restored.get("execution_capture") or {}
+                if not isinstance(capture, dict) or (capture.get("request_id") is not None and not isinstance(capture["request_id"], str)):
+                    raise ValueError("Invalid saved execution metadata")
 
                 # Validate every replacement, including display history, without
                 # disturbing live producers or an outstanding approval.
@@ -652,6 +658,7 @@ class DrxAgent:
                     self.master.ballot = ballot
                     self.master._team_members = members
                     self.master._run_id = run_id
+                    self.master._execution_request_id = capture.get("request_id")
                     self.master._resident_workers = residents
                 finally:
                     self.master.finish_restore()

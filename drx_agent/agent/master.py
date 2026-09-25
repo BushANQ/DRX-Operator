@@ -22,6 +22,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from drx_agent.agent.blackboard import Blackboard, SECTIONS
+from drx_agent.agent.execution_context import (
+    advance_turn, execution_scope, invocation_scope, run_context,
+    set_execution_context, tool_context,
+)
 from drx_agent.agent.finding import Evidence, Finding
 from drx_agent.agent.knowledge_base import Credential
 from drx_agent.agent.artifact_store import ArtifactStore
@@ -280,6 +284,7 @@ class MasterAgent:
         self._vote_tasks: set[asyncio.Task] = set()
         self._vote_lock = asyncio.Lock()
         self._run_id = uuid.uuid4().hex
+        self._execution_request_id: str | None = None
         memory = config.get("memory", {})
         if not isinstance(memory, dict):
             raise ValueError("collaboration.memory must be an object")
@@ -1263,6 +1268,9 @@ class MasterAgent:
                 ]
             sub.activation = runtime["activation"]
             sub._interrupt = runtime["stopped"]
+            sub._execution_capture = runtime["execution_capture"]
+            sub._execution_parent = dict(runtime["execution_capture"])
+            sub._execution_previous_turn_id = runtime["execution_capture"].get("turn_id")
             sub.status = status
             residents[actor] = sub
         return ballot, members, str(data.get("run_id") or uuid.uuid4().hex), residents
@@ -1903,6 +1911,8 @@ class MasterAgent:
                                     "properties": {
                                         "id": {"type": "string"},
                                         "content": {"type": "string"},
+                                        "parent_id": {"type": "string", "description": "已知的父任务 ID；没有则省略。"},
+                                        "depends_on": {"type": "array", "items": {"type": "string"}, "description": "明确依赖的任务 ID；没有则省略。"},
                                         "status": {
                                             "type": "string",
                                             "enum": ["pending", "in_progress", "completed"],
@@ -2722,8 +2732,13 @@ class MasterAgent:
         details = {"tool": name, "agent_id": actor, "call_seq": call_seq, "input": args}
         output: dict = {}
         status = "error"
-        with Activity(self.event_bus, "tool", name, agent_id=actor) as activity:
+        with Activity(self.event_bus, "tool", name, agent_id=actor) as activity, execution_scope(), invocation_scope(activity.data["id"]):
             details["invocation_id"] = activity.data["id"]
+            stage = getattr(getattr(self, "stage_machine", None), "stage", None)
+            capture = tool_context(actor, activity.data["id"], stage=getattr(stage, "value", None),
+                                   todos=getattr(self, "todos", []), intent_id=getattr(self, "_current_intent_id", None))
+            set_execution_context(capture)
+            details.update(execution_context=capture, tool_call_id=capture.get("tool_call_id"), started_at=time.time())
             self.event_bus.publish(Event(EventType.TOOL_CALL, {
                 **details, "code": json.dumps(args, ensure_ascii=False), "status": "running",
             }))
@@ -2761,7 +2776,7 @@ class MasterAgent:
             finally:
                 self._tool_handoffs.reset(handoff_token)
                 self.event_bus.publish(Event(EventType.TOOL_RESULT, {
-                    **details, "status": status, "output": output.get("output", ""),
+                    **details, "status": status, "output": output.get("output", ""), "completed_at": time.time(),
                 }))
                 activity.update(status, output=True)
 
@@ -4620,6 +4635,7 @@ class MasterAgent:
                 self._actor.reset(token)
 
         sub.tool_executor = execute
+        sub.execution_task_id = intent_id
         self._resident_workers[sub.agent_id] = sub
         if bind_prompt:
             self._bind_worker_prompt(sub)
@@ -4817,7 +4833,9 @@ class MasterAgent:
         work_item: str | None = None, generation: int | None = None,
     ) -> SubAgentResult:
         sub.status = SubAgentStatus.QUEUED
-        sub.queue()
+        sub.execution_task_id = intent_id
+        with execution_scope(stage=self.stage_machine.stage.value):
+            sub.queue()
         activation = sub.activation
         result = None
         try:
@@ -5042,11 +5060,21 @@ class MasterAgent:
             status = item.get("status", "pending")
             if status not in ("pending", "in_progress", "completed"):
                 status = "pending"
-            cleaned.append({
+            record = {
                 "id": str(item.get("id") or f"t{i}"),
                 "content": content,
                 "status": status,
-            })
+            }
+            if "parent_id" in item:
+                if not isinstance(item["parent_id"], str) or not item["parent_id"].strip():
+                    return json.dumps({"error": "parent_id must be a nonempty string"}, ensure_ascii=False)
+                record["parent_id"] = item["parent_id"]
+            if "depends_on" in item:
+                dependencies = item["depends_on"]
+                if not isinstance(dependencies, list) or any(not isinstance(value, str) or not value.strip() for value in dependencies):
+                    return json.dumps({"error": "depends_on must be an array of nonempty task IDs"}, ensure_ascii=False)
+                record["depends_on"] = list(dependencies)
+            cleaned.append(record)
         self.todos = cleaned
         self.event_bus.publish(
             Event(
@@ -6449,7 +6477,7 @@ class MasterAgent:
     async def _chat_with_image(self, prompt: str, image_path: str) -> None:
         import mimetypes
 
-        async with self._chat_session("Reading image") as active:
+        async with self._chat_session("Reading image", new_request=True) as active:
             if not active:
                 return
             try:
@@ -6629,7 +6657,7 @@ class MasterAgent:
             raise RuntimeError("Resource cleanup failed: " + "; ".join(failures))
 
     async def _chat_with_llm(self, user_text: str, _skip_user_message: bool = False) -> None:
-        async with self._chat_session() as active:
+        async with self._chat_session(new_request=not _skip_user_message) as active:
             if not active:
                 return
             if not _skip_user_message:
@@ -6638,7 +6666,7 @@ class MasterAgent:
             await self._chat_loop()
 
     @asynccontextmanager
-    async def _chat_session(self, label: str = "Working on your request"):
+    async def _chat_session(self, label: str = "Working on your request", *, new_request: bool = False):
         """Own queued and active chat/compaction work through one restore barrier."""
         task = asyncio.current_task()
         generation = self._session_generation
@@ -6654,8 +6682,11 @@ class MasterAgent:
                 self._chat_task = task
                 token = self._actor.set("master")
                 try:
-                    with Activity(self.event_bus, "run", label):
-                        yield True
+                    if new_request or not getattr(self, "_execution_request_id", None):
+                        self._execution_request_id = uuid.uuid4().hex
+                    with Activity(self.event_bus, "run", label) as activity:
+                        with execution_scope(run_context("master", activity.data["id"], self._execution_request_id)):
+                            yield True
                 finally:
                     self._chat_active = False
                     self._interrupt = False
@@ -6787,6 +6818,7 @@ class MasterAgent:
 
             stream_id = uuid.uuid4().hex
             stream_opened = False
+            advance_turn("master")
 
             try:
                 async def _consume():
@@ -6920,7 +6952,11 @@ class MasterAgent:
 
     async def _run_chat_tools(self, calls: list[dict]) -> None:
         """Retain every result in call order, including interrupted tool pairs."""
-        tasks = [asyncio.create_task(self._execute_tool(call["name"], call["input"]))
+        async def execute(call: dict):
+            with execution_scope(tool_call_id=call.get("id")):
+                return await self._execute_tool(call["name"], call["input"])
+
+        tasks = [asyncio.create_task(execute(call))
                  for call in calls]
         group = asyncio.gather(*tasks, return_exceptions=True)
         cancelled = False

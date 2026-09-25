@@ -14,7 +14,7 @@ class SessionManager:
              todos=None, mode="", session_usage=None, frontier=None,
              handoff=None, stage=None, forum=None, claims=None,
              moderator=None, irc=None, project_note=None, team=None, transcript=None,
-             model_selection=None) -> str:
+             model_selection=None, execution_capture=None, swarm=None) -> str:
         session_id = str(uuid.uuid4())[:12]
         self.store.save_session(
             session_id=session_id,
@@ -38,6 +38,8 @@ class SessionManager:
                 "team": team or {},
                 "transcript": transcript,
                 "model_selection": model_selection,
+                "execution_capture": execution_capture,
+                "swarm": swarm,
             },
         )
         return session_id
@@ -69,6 +71,8 @@ class SessionManager:
             "team": extra.get("team", {}),
             "transcript": extra.get("transcript"),
             "model_selection": extra.get("model_selection"),
+            "execution_capture": extra.get("execution_capture"),
+            "swarm": extra.get("swarm"),
         }
 
     def checkpoint(self, kb, phase, messages, active_targets) -> str:

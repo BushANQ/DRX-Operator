@@ -378,6 +378,9 @@ class TranscriptLog:
                     data.get("message") or data.get("error")), "status": "error"}
             record.update(id=record_id, actor=actor, timestamp=old.get("timestamp", event.timestamp),
                           data={**old.get("data", {}), **data})
+            for field in ("tool_call_id", "invocation_id", "execution_context", "started_at", "completed_at"):
+                if field in data:
+                    record[field] = deepcopy(data[field])
             # Streaming tokens belong only in the accumulated text, not duplicated
             # in every serialized payload; retain all other event metadata.
             record["data"].pop("delta", None)
