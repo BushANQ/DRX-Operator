@@ -1,11 +1,13 @@
 import { DotsSixVertical, X } from '@phosphor-icons/react';
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
 import RecordDetails from './RecordDetails.tsx';
+import SemanticDetails from './SemanticDetails.tsx';
+import type { SemanticNode, SemanticEdge } from './semanticTypes.ts';
 import type { ReplayAction } from './types.ts';
 
-interface InspectorProps { action: ReplayAction; sessionId: string; onClose: () => void }
+interface InspectorProps { action: ReplayAction | null; node?: SemanticNode | null; relations?: SemanticEdge[]; sessionId: string; onClose: () => void }
 
-export default function NodeInspector({ action, sessionId, onClose }: InspectorProps) {
+export default function NodeInspector({ action, node, relations, sessionId, onClose }: InspectorProps) {
   const element = useRef<HTMLElement>(null);
   const drag = useRef<{ startX: number; startY: number; x: number; y: number } | null>(null);
   const [position, setPosition] = useState({ x: 16, y: 64 });
@@ -39,15 +41,15 @@ export default function NodeInspector({ action, sessionId, onClose }: InspectorP
     event.preventDefault();
   };
   return (
-    <section ref={element} className="node-inspector" aria-label="记录详情" style={{ left: position.x, top: position.y }}>
+    <section ref={element} className="node-inspector" aria-label="节点详情" style={{ left: position.x, top: position.y }}>
       <header className="inspector-header" onPointerDown={startDrag} onPointerMove={(event) => {
         const active = drag.current;
         if (active) setPosition(clamp(active.x + event.clientX - active.startX, active.y + event.clientY - active.startY));
       }} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}>
-        <DotsSixVertical size={16} className="inspector-grip" /><span>记录详情</span><span className="inspector-index">#{String(action.step + 1).padStart(2, '0')}</span>
-        <button className="icon-button" aria-label="关闭记录详情" onClick={onClose}><X size={16} /></button>
+        <DotsSixVertical size={16} className="inspector-grip" /><span>节点详情</span><span className="inspector-index">{action ? `#${String(action.step + 1).padStart(2, '0')}` : '实体'}</span>
+        <button className="icon-button" aria-label="关闭节点详情" onClick={onClose}><X size={16} /></button>
       </header>
-      <RecordDetails action={action} sessionId={sessionId} />
+      <>{node ? <SemanticDetails node={node} action={action} sessionId={sessionId} relations={relations} /> : <RecordDetails action={action} sessionId={sessionId} />}</>
     </section>
   );
 }

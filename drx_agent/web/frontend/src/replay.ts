@@ -63,7 +63,7 @@ export function isReplayShortcut(event: KeyboardEvent): boolean {
       && event.target.closest('input, textarea, button, select, summary, a, [contenteditable], [role="button"], .action-items-list, .detail-panel-body, .session-sidebar'));
 }
 
-export function overviewViewport(nodes: ReplayNode[], width: number, height: number, inspectorOpen = false) {
+export function overviewViewport(nodes: ReadonlyArray<{ position: { x: number; y: number }; width?: number; height?: number }> , width: number, height: number, inspectorOpen = false) {
   if (!nodes.length) return null;
   const left = inspectorOpen && width > 620 ? 350 : 30;
   const right = 66;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Check, Copy, TerminalWindow } from '@phosphor-icons/react';
 import CodeBlock from './CodeBlock.tsx';
 import { eventPresentation } from './presentation.ts';
@@ -7,6 +7,7 @@ import type { ReplayAction } from './types.ts';
 interface RecordDetailsProps {
   action: ReplayAction | null;
   sessionId: string;
+  children?: ReactNode;
 }
 
 function hasValue(value: unknown): boolean {
@@ -28,7 +29,7 @@ export function RawRecord({ value, label }: { value: unknown; label: string }) {
   );
 }
 
-export default function RecordDetails({ action, sessionId }: RecordDetailsProps) {
+export default function RecordDetails({ action, sessionId, children }: RecordDetailsProps) {
   const [copyFeedback, setCopyFeedback] = useState<{
     actionId: string;
     sessionId: string;
@@ -97,6 +98,7 @@ export default function RecordDetails({ action, sessionId }: RecordDetailsProps)
           {hasValue(action.thought) && action.thought !== action.text && dataBlock('记录中的推理内容', action.thought)}
           {dataBlock('输入参数', hasValue(action.fullInput) ? action.fullInput : action.input)}
           {dataBlock('输出结果', hasValue(action.fullOutput) ? action.fullOutput : action.output, true)}
+          {children}
           <RawRecord key={`${sessionId}:${action.id}`} value={action.data} label="事件" />
           <p className="copy-feedback" role="status">{feedback?.message ?? ''}</p>
         </>

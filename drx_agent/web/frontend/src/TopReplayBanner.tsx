@@ -1,16 +1,16 @@
-import { ArrowClockwise, ArrowsIn, ArrowsOut, ChartBar, Graph, Sidebar, Terminal } from '@phosphor-icons/react';
+import { ArrowClockwise, ArrowsIn, ArrowsOut, TreeStructure, Graph, Sidebar, Terminal } from '@phosphor-icons/react';
 
 interface HeaderProps {
   sessionName: string | null;
   sessionCount: number | null;
   sessionsVisible: boolean;
   activityVisible: boolean;
-  view: 'stream' | 'findings';
+  view: 'execution' | 'causal';
   loading: boolean;
   isFullscreen: boolean;
   onToggleSessions: () => void;
   onToggleActivity: () => void;
-  onViewChange: (view: 'stream' | 'findings') => void;
+  onViewChange: (view: 'execution' | 'causal') => void;
   onRefresh: () => void;
   onToggleFullscreen: () => void;
 }
@@ -23,8 +23,8 @@ export default function TopReplayBanner({ sessionName, sessionCount, sessionsVis
       <div className="header-divider" />
       <button className="icon-button header-mobile-menu" aria-label={sessionsVisible ? '收起会话列表' : '展开会话列表'} aria-expanded={sessionsVisible} onClick={onToggleSessions}><Sidebar size={19} /></button>
       <nav className="workspace-views" aria-label="工作区视图">
-        <button className={view === 'stream' ? 'is-active' : ''} aria-pressed={view === 'stream'} onClick={() => onViewChange('stream')}><Graph size={16} />记录图</button>
-        <button className={view === 'findings' ? 'is-active' : ''} aria-pressed={view === 'findings'} onClick={() => onViewChange('findings')}><ChartBar size={16} />会话汇总</button>
+        <button className={view === 'execution' ? 'is-active' : ''} aria-pressed={view === 'execution'} onClick={() => onViewChange('execution')}><Graph size={16} />执行图</button>
+        <button className={view === 'causal' ? 'is-active' : ''} aria-pressed={view === 'causal'} onClick={() => onViewChange('causal')}><TreeStructure size={16} />因果图</button>
       </nav>
       <div className="header-session" title={sessionName ?? '无会话'}><span className="header-session-caption">当前会话</span><span>{sessionName ?? '无会话'}</span></div>
       <div className="workspace-header-actions">
