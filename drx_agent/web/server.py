@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-from drx_agent.web.graph import _target_summary
+from drx_agent.web.graph import _target_summary, _timestamp, _time_offset, _explicit_stage
 
 logger = logging.getLogger(__name__)
 
@@ -463,7 +463,6 @@ def _session_to_graph(raw: dict) -> dict:
 
     # -------------------------------------------------- 3. Extract Action Stream
     raw_actions = []
-    base_time = transcript_records[0].get("timestamp", 0) if transcript_records else 0
 
     if transcript_records:
         for i, rec in enumerate(transcript_records):
@@ -473,13 +472,14 @@ def _session_to_graph(raw: dict) -> dict:
             labels = {"tool": "工具", "approval": "审批", "worker": "协作", "error": "错误", "message": "消息"}
             category = labels.get(kind, "事件")
             title = str(rec.get("tool") or text.split("\n", 1)[0] or kind or "无")
+            stage_key, stage_title = _explicit_stage(rec)
             raw_actions.append({
                 "category": category, "title": title, "actor": rec.get("actor"),
                 "tool": rec.get("tool"), "input": rec.get("input"), "output": rec.get("output"),
                 "thought": text if role == "assistant" else None,
                 "text": text, "timestamp": rec.get("timestamp"), "status": rec.get("status"),
-                "stageKey": rec.get("stageKey") or rec.get("data", {}).get("stageKey"),
-                "stageTitle": rec.get("stageTitle") or rec.get("data", {}).get("stageTitle"),
+                "stageKey": stage_key,
+                "stageTitle": stage_title,
                 "data": rec,
             })
     else:
@@ -530,22 +530,21 @@ def _session_to_graph(raw: dict) -> dict:
         nodes = []
         edges = []
 
-    # Assign smooth timestamps
-    timestamps = [
-        2, 5, 13, 21, 29, 37, 45, 59, 67, 81, 95, 110, 125, 140, 160, 185, 210, 240, 270, 305,
-        340, 375, 410, 450, 490, 530, 570, 620, 670, 720, 780, 840, 900, 960, 1020, 1080, 1140, 1200
-    ]
-
+    base_time = next((_timestamp(act.get("timestamp")) for act in condensed
+                      if _timestamp(act.get("timestamp")) is not None), None)
     action_stream = []
-    stage_counts = {s["key"]: 0 for s in STANDARD_STAGES}
-
+    stages_by_key = {}
     for idx, act in enumerate(condensed):
-        t_sec = timestamps[idx] if idx < len(timestamps) else idx * 30 + 2
-        offset_str = _format_time_offset(t_sec)
-
-        stage_idx = min(len(STANDARD_STAGES) - 1, int(idx / len(condensed) * len(STANDARD_STAGES)))
-        st = STANDARD_STAGES[stage_idx]
-        stage_counts[st["key"]] += 1
+        timestamp = _timestamp(act.get("timestamp"))
+        t_sec = timestamp - base_time if timestamp is not None and base_time is not None else None
+        offset_str = _time_offset(t_sec)
+        stage_key = act.get("stageKey")
+        if stage_key:
+            stage = stages_by_key.setdefault(stage_key, {
+                "key": stage_key, "title": act.get("stageTitle") or stage_key,
+                "count": 0, "firstActionIndex": idx,
+            })
+            stage["count"] += 1
 
         cat_colors = {
             "调度": "#38bdf8",
@@ -580,21 +579,16 @@ def _session_to_graph(raw: dict) -> dict:
             "thought": act.get("thought"),
             "text": act.get("text"),
             "data": act.get("data"),
-            "stageKey": st["key"],
-            "stageIndex": stage_idx + 1,
-            "stageTitle": st["title"],
-            "stageTag": st["tag"],
-            "cardId": st["cardId"],
-            "status": "done",
+            "timestamp": timestamp,
+            "stageKey": stage_key,
+            "stageIndex": None,
+            "stageTitle": act.get("stageTitle"),
+            "stageTag": None,
+            "cardId": None,
+            "status": act.get("status"),
         })
 
-    # Prepare stage milestone data
-    stages_data = []
-    for s in STANDARD_STAGES:
-        stages_data.append({
-            **s,
-            "count": stage_counts.get(s["key"], 1),
-        })
+    stages_data = list(stages_by_key.values())
 
     # Summary
     summary = {
@@ -605,7 +599,7 @@ def _session_to_graph(raw: dict) -> dict:
         "targetNotes": target_notes,
         "createdAt": raw.get("created_at", 0),
         "totalActions": len(action_stream),
-        "totalStages": len(STANDARD_STAGES),
+        "totalStages": len(stages_data),
         "findingsCount": len(findings_list),
         "targetsCount": len(targets_list),
         "credsCount": len(creds_list),

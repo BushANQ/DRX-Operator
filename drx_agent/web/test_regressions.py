@@ -10,6 +10,18 @@ def snapshot(records=None, kb=None):
 
 
 class DashboardRegressions(unittest.TestCase):
+    def test_time_status_and_stages_come_only_from_recorded_events(self):
+        records = [{"kind": "tool", "tool": "example", "timestamp": timestamp, "status": status}
+                   for timestamp, status in [(1000, "error"), (1060, "running"), (4600, "done")]]
+        graph = _session_to_graph(snapshot(records))
+        self.assertEqual([a["timeSeconds"] for a in graph["actions"]], [0, 60, 3600])
+        self.assertEqual([a["status"] for a in graph["actions"]], ["error", "running", "done"])
+        self.assertEqual(graph["stages"], [])
+        missing = _session_to_graph(snapshot([{"kind": "message", "text": "/stop"}]))["actions"][0]
+        self.assertIsNone(missing["timeSeconds"])
+        self.assertIsNone(missing["stageKey"])
+        self.assertIsNone(missing["status"])
+
     def test_empty_records_cannot_generate_successful_operations(self):
         graph = _session_to_graph(snapshot())
         self.assertEqual(graph["actions"], [])

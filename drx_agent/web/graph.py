@@ -1,5 +1,7 @@
 """Evidence-preserving session projection helpers."""
 import json
+import math
+from datetime import datetime
 from urllib.parse import urlsplit
 
 def _text(value):
@@ -43,3 +45,47 @@ def _target_summary(targets):
     if _label(target.get("notes")):
         parts.append(target["notes"])
     return host, url, " · ".join(parts) or None
+
+
+def _timestamp(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value if math.isfinite(value) else None
+    if isinstance(value, str):
+        try:
+            numeric = float(value)
+            return numeric if math.isfinite(numeric) else None
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                # A timezone-free date cannot determine an absolute timestamp.
+                return parsed.timestamp() if parsed.tzinfo is not None else None
+            except (ValueError, OverflowError):
+                pass
+    return None
+
+def _time_offset(seconds):
+    if seconds is None:
+        return None
+    sign = "-" if seconds < 0 else "+"
+    seconds = abs(seconds)
+    minutes, remaining = divmod(seconds, 60)
+    if minutes:
+        return f"T{sign}{int(minutes)}m{remaining:05.2f}".rstrip("0").rstrip(".") + "s"
+    return f"T{sign}{seconds:g}s"
+
+def _explicit_stage(record):
+    """Only event-owned stage metadata can assign an event to a stage."""
+    for source in (record, record.get("data", {})):
+        if not isinstance(source, dict):
+            continue
+        stage = source.get("stage")
+        key = _label(source.get("stageKey")) or _label(source.get("stage_key"))
+        title = _label(source.get("stageTitle")) or _label(source.get("stage_title"))
+        if isinstance(stage, str):
+            key = key or _label(stage)
+        elif isinstance(stage, dict):
+            key = key or _label(stage.get("key")) or _label(stage.get("stage"))
+            title = title or _label(stage.get("title"))
+        if key or title:
+            return key or title, title or key
+    return None, None
