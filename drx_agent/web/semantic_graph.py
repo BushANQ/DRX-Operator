@@ -438,7 +438,22 @@ def _causal(raw, extra):
                 identity = _id("causal-record", record["id"]) if _string(record.get("id")) else _id("causal-blackboard", path)
                 graph.node(identity, record.get("text"), kind, {"path": path, "record": record})
     findings = list(_finding_records(kb))
-    for finding, path, _ in findings:
+    finding_ids = {}
+    finding_aliases = defaultdict(list)
+    conflicting_aliases = set()
+    for finding, path, host in findings:
+        finding_id = _id("causal-finding", finding.get("id") or [host, path])
+        finding_ids[path] = graph.node(finding_id, finding.get("claim") or finding.get("title"), "finding",
+                                       {"path": path, "record": finding, "host": host}, status=finding.get("status"))
+        claim = _string(finding.get("claim"))
+        recorded_host = _string(finding.get("host"))
+        hosts = {value for value in (host, recorded_host) if _string(value)}
+        if claim:
+            for candidate_host in hosts:
+                alias = f"{candidate_host}::{claim}"
+                finding_aliases[alias].append((finding_id, path))
+                if len(hosts) > 1:
+                    conflicting_aliases.add(alias)
         for index, evidence in enumerate(_items(finding.get("evidence"))):
             if not isinstance(evidence, dict):
                 continue
@@ -450,6 +465,13 @@ def _causal(raw, extra):
     def reference(value, path, kind="reference"):
         if not _string(value):
             return None
+        if value in finding_aliases:
+            matches = finding_aliases[value]
+            if len(matches) == 1 and value not in known and value not in conflicting_aliases:
+                return matches[0][0]
+            return graph.node(_id("causal-unresolved", value), f"未解析引用 · {value}", kind,
+                              {"path": path, "reference": value, "unresolved": True,
+                               "reason": "ambiguous_finding_reference", "candidatePaths": [entry[1] for entry in matches]})
         if value in known:
             record, source_path, known_kind = known[value]
             return graph.node(_id("causal-record", value), record.get("hypothesis") or record.get("text") or record.get("value") or value,
@@ -459,9 +481,7 @@ def _causal(raw, extra):
                           {"path": path, "reference": value, "unresolved": True})
 
     for finding, path, host in findings:
-        finding_id = _id("causal-finding", finding.get("id") or [host, path])
-        graph.node(finding_id, finding.get("claim") or finding.get("title"), "finding",
-                   {"path": path, "record": finding, "host": host}, status=finding.get("status"))
+        finding_id = finding_ids[path]
         for index, evidence in enumerate(_items(finding.get("evidence"))):
             evidence_path = f"{path}.evidence[{index}]"
             if isinstance(evidence, str):

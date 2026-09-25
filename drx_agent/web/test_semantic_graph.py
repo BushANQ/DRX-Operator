@@ -278,6 +278,45 @@ class SemanticGraphTests(unittest.TestCase):
         self.assertEqual("Observed fact", fact["label"])
         self.assertIsNone(fact["status"])
 
+    def test_host_claim_dependency_reuses_the_existing_finding(self):
+        raw = session([], extra={"frontier": {"intents": [{"id": "it-1", "hypothesis": "Follow-up", "depends_on": ["example.test::测试发现"]}]}},
+                      kb={"findings": {"example.test": [{"host": "example.test", "claim": "测试发现", "status": "suspected"}]}})
+        graph = project(raw)[0]["causal"]
+        self.assertEqual(2, len(graph["nodes"]))
+        finding = next(node for node in graph["nodes"] if node["kind"] == "finding")
+        self.assertEqual(1, len(graph["edges"]))
+        self.assertEqual(finding["id"], graph["edges"][0]["source"])
+        self.assertEqual("depends_on", graph["edges"][0]["relation"])
+        self.assertFalse(any(node["source"].get("unresolved") for node in graph["nodes"]))
+
+    def test_duplicate_host_claim_remains_an_ambiguous_reference(self):
+        raw = session([], extra={"frontier": {"intents": [{"id": "it-1", "hypothesis": "Follow-up", "depends_on": ["example.test::Same"]}]}},
+                      kb={"findings": {"example.test": [{"claim": "Same", "status": "suspected"}, {"claim": "Same", "status": "confirmed"}]}})
+        graph = project(raw)[0]["causal"]
+        self.assertEqual(2, sum(node["kind"] == "finding" for node in graph["nodes"]))
+        reference = next(node for node in graph["nodes"] if node["source"].get("unresolved"))
+        self.assertEqual("ambiguous_finding_reference", reference["source"]["reason"])
+        self.assertEqual(reference["id"], graph["edges"][0]["source"])
+
+    def test_host_claim_collision_with_another_entity_does_not_pick_a_target(self):
+        raw = session([], extra={"frontier": {"intents": [{"id": "it-1", "hypothesis": "Follow-up", "depends_on": ["example.test::Same"]}]}},
+                      kb={"findings": {"example.test": [{"claim": "Same"}]},
+                          "blackboard": {"entries": {"findings": [{"id": "example.test::Same", "text": "Different entity"}]}}})
+        graph = project(raw)[0]["causal"]
+        reference = next(node for node in graph["nodes"] if node["source"].get("unresolved"))
+        self.assertEqual("reference", reference["kind"])
+        self.assertEqual(reference["id"], graph["edges"][0]["source"])
+        self.assertEqual(1, sum(node["kind"] == "finding" for node in graph["nodes"]))
+        self.assertEqual(1, sum(node["kind"] == "fact" for node in graph["nodes"]))
+
+    def test_conflicting_bucket_host_and_record_host_remain_unresolved(self):
+        raw = session([], extra={"frontier": {"intents": [{"id": "it-1", "hypothesis": "Follow-up", "depends_on": ["example.test::Same"]}]}},
+                      kb={"findings": {"example.test": [{"host": "different.test", "claim": "Same"}]}})
+        graph = project(raw)[0]["causal"]
+        reference = next(node for node in graph["nodes"] if node["source"].get("unresolved"))
+        self.assertEqual("ambiguous_finding_reference", reference["source"]["reason"])
+        self.assertEqual(reference["id"], graph["edges"][0]["source"])
+
     def test_unlinked_hypotheses_and_blackboard_facts_are_retained(self):
         raw = session([], extra={"frontier": {"intents": [{"id": "it-alone", "hypothesis": "Intent hypothesis", "status": "done"}]}},
                       kb={"blackboard": {"entries": {
