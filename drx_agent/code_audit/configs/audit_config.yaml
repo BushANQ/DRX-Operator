@@ -1,0 +1,70 @@
+# DRX-Operator 代码审计模式配置（--code-audit）
+#
+# 命令行：
+#   python -m drx_agent.main --code-audit --audit-path <待审计项目目录>
+#
+# 未显式传入 --audit-config 时的查找顺序：
+#   $DRX_AUDIT_CONFIG -> <仓库>/configs/audit_config.yaml ->
+#   ~/.config/drx-operator/audit_config.yaml -> 包内置默认配置
+#
+# 凭据优先级：本文件 openai.api_key -> api_key_env 指向的环境变量 ->
+# DEEPSEEK_API_KEY / DRX_LLM_API_KEY / OPENAI_API_KEY。
+
+workspace: .
+
+openai:
+  # responses: POST /responses（支持 previous_response_id 续接与思维链）
+  # chat:      POST /chat/completions
+  api_interface: responses
+  base_url: https://api.deepseek.com/v1
+  api_key: ""
+  api_key_env: DEEPSEEK_API_KEY
+  model: deepseek-v4-flash
+  thinking:
+    type: enabled
+  reasoning_effort: max
+  temperature: 1
+  top_p: 1
+  max_context_tokens: 1048576
+  max_output_tokens: 393216
+  timeout_seconds: 10
+  stream: true
+
+# 上下文压缩模型；整段省略时继承 openai。
+# compress_openai:
+#   model: deepseek-v4-flash
+#   max_context_tokens: 1048576
+#   max_output_tokens: 393216
+
+prompts:
+  # 留空使用 drx_agent/code_audit/prompts 下的内置提示词；
+  # 相对路径按本配置文件所在目录解析。
+  system: ""
+  plan_system: ""
+  compress: ""
+  skills_dir: ""
+  templates_dir: ""
+
+agent:
+  # 侦察与审计阶段的独立 Agent 数量，范围 1-666。
+  recon_agents: 4
+  audit_agents: 12
+  # forum_read 等待同伴发言的上限，范围 1-120 秒。
+  forum_wait_seconds: 60
+  # 无限模式：不使用 end_audit 结束工具；时间或 token 任一耗尽即停止。
+  # 时间合计为 0、token 为 0 分别表示不限；两项均为 0 则不限。
+  infinite_mode: true
+  budget_hours: 3
+  budget_minutes: 0
+  budget_tokens: 0
+  max_turns: 0
+  session_dir: sessions
+  log_session: false
+  log_session_dir: log_sessions
+  retry_attempts: 3
+  compress_at_ratio: 0.70
+  compress_buffer_tokens: 393216
+  auto_plan: true
+  max_tool_result_chars: 12000
+  moderator_enabled: true
+  moderator_interval_seconds: 60

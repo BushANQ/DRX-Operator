@@ -737,7 +737,39 @@ def main() -> int:
         "--no-browser", action="store_true",
         help="(Web mode only) Don't open the browser automatically",
     )
+    parser.add_argument(
+        "--code-audit", action="store_true",
+        help=(
+            "Launch the source-code audit TUI (multi-agent recon/audit stages). "
+            "Without this flag the normal penetration-testing workflow is unchanged"
+        ),
+    )
+    parser.add_argument(
+        "--audit-path", default=None, metavar="DIR",
+        help=(
+            "(With --code-audit) Directory of the project to audit and start "
+            "immediately. When omitted, the audit TUI asks for the directory"
+        ),
+    )
+    parser.add_argument(
+        "--audit-config", default=None, metavar="FILE",
+        help=(
+            "(With --code-audit) Audit configuration file; default lookup is "
+            "$DRX_AUDIT_CONFIG, configs/audit_config.yaml, "
+            "~/.config/drx-operator/audit_config.yaml"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.code_audit:
+        if args.web:
+            parser.error("--code-audit 不能与 --web 同时使用")
+        if args.no_agent or args.no_browser:
+            parser.error("--no-agent/--no-browser 仅适用于 --web 模式")
+        from drx_agent.code_audit.entry import run_code_audit
+        return run_code_audit(args.audit_config, args.audit_path)
+    if args.audit_path is not None or args.audit_config is not None:
+        parser.error("--audit-path/--audit-config 只能与 --code-audit 一起使用")
 
     if args.web:
         from drx_agent.web.launcher import launch_web

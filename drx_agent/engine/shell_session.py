@@ -8,15 +8,20 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import fcntl
 import math
 import os
-import pty
 import select
 import signal
 import subprocess
 import time
 import uuid
+
+try:  # Pseudo-terminals are POSIX-only; importing the rest of the agent must
+    import fcntl  # not fail on platforms without them.
+    import pty
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+    pty = None  # type: ignore[assignment]
 
 from drx_agent.engine.process import check_cancelled, terminate_process_sync
 
@@ -25,6 +30,10 @@ class ShellSession:
 
     def __init__(self, command: str, name: str = "", env: dict | None = None) -> None:
         check_cancelled()
+        if pty is None or fcntl is None:
+            raise RuntimeError(
+                "persistent shell sessions require a POSIX pseudo-terminal"
+            )
         self.session_id = f"sh-{uuid.uuid4().hex[:6]}"
         self.command = command
         self.name = name or self.session_id
